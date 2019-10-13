@@ -7,7 +7,7 @@ message MetaInfo {
     message FileInfo {
 
         // The length of the file, in bytes.
-        uint32 length = 1;
+        uint64 length = 1;
 
         // A list of UTF-8 encoded strings corresponding to subdirectory names, the last of which is the actual file name.
         // a zero length list is an error case.
@@ -15,7 +15,7 @@ message MetaInfo {
     }
 
     // The URL of the tracker.
-    string annouce = 1;
+    string annouce_url = 1;
 
     // A UTF-8 encoded string which is the suggested name to save the file (or directory) as
     // In the single file case, the name key is the name of a file,
@@ -29,11 +29,11 @@ message MetaInfo {
     // maps to a string whose length is a multiple of 20.
     // It is to be subdivided into strings of length 20, each of which is the SHA1 hash of the piece at the
     // corresponding index.
-    string pieces = 4;
+    repeated bytes pieces = 4;
 
     // The length of the file in bytes.
     // only single file
-    uint32 length = 5;
+    uint64 length = 5;
 
     // only multiple files
     repeated FileInfo files = 6;
@@ -41,15 +41,11 @@ message MetaInfo {
 };
 
 message Peer {
-    // ID of a given peer of length 20 which this downloader
+    // ID of a given peer.
     bytes id = 1;
 
-    // An optional parameter giving the IP (or dns name) which this peer is at.
-    // Generally used for the origin if it's on the same machine as the tracker.
-    bytes ip = 2;
-
-    // The port number this peer is listening on.
-    uint32 port = 3;
+    // multiaddrs for a given peer
+    repeated bytes addrs = 2;
 
 };
 
@@ -63,34 +59,55 @@ message TrackerRequest {
     }
 
     // The 20 byte sha1 hash of the bencoded form of the info value from the metainfo file.
-    bytes infoHash = 1;
+    bytes info_hash = 1;
 
     Peer peer = 2;
 
     // The total amount uploaded so far
-    bytes uploaded = 3;
+    uint64 uploaded = 3;
 
     // The total amount downloaded so far, encoded in base ten ascii.
-    bytes downloaded = 4;
+    uint64 downloaded = 4;
 
     // The number of bytes this peer still has to download.
-    bytes left = 5;
+    uint64 left = 5;
 
-    EventType event = 6;
+    // Optional. Number of peers that the client would like to receive from the tracker.
+    // This value is permitted to be zero. If omitted, typically defaults to 50 peers.
+    uint32 numwant = 6;
+
+    // optional event type
+    EventType event = 7;
 
 };
 
 message TrackerResponse {
 
+    enum TrackerResponseType {
+        FAILURE = 0;
+        SUCCESS = 1;
+    }
+
+    TrackerResponseType type = 1;
+
     // when the query failed
-    string failure_reason = 1;
+    string failure_reason = 2;
+
+    // number of peers with the entire file, i.e. seeders
+    uint32 complete = 3;
+
+    // number of non-seeder peers, aka "leechers"
+    uint32 incomplete = 4;
 
     // the number of seconds the downloader should wait between regular rerequests.
-    uint32 interval = 2;
+    uint32 interval = 5;
+
+    // Minimum announce interval.
+    // If present clients must not reannounce more frequently than this
+    uint32 min_interval = 6;
 
     // matching peers
-    repeated Peer peers = 3;
-
+    repeated Peer peers = 7;
 };
 
 // messages for the peer protocol
@@ -138,7 +155,7 @@ message PeerMessage {
     // The first byte of the bitfield corresponds to indices 0 - 7 from high bit to low bit, respectively.
     // The next one 8-15, etc. Spare bits at the end are set to zero.
     // BITFIELD
-    bytes payload = 2;
+    bytes index_field = 2;
 
     // the index which that downloader just completed and checked the hash of.
     // HAVE
