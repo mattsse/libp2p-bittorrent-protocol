@@ -3,7 +3,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, PartialEq, Eq)]
-pub struct MetaInfo {
+pub struct TorrentInfo {
     /// The URL of the tracker
     pub annouce_url: String,
     /// suggested name to save the file (or directory)
@@ -19,13 +19,7 @@ pub struct MetaInfo {
     pub file_info: FileInfo,
 }
 
-//impl fmt::Display for MetaInfo {
-//    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-//        unimplemented!()
-//    }
-//}
-
-impl MetaInfo {
+impl TorrentInfo {
     #[inline]
     pub fn is_file(&self) -> bool {
         self.file_info.is_file()

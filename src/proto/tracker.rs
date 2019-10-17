@@ -1,12 +1,10 @@
-use crate::protocol::BttPeer;
+use crate::proto::BttPeer;
 use sha1::Sha1;
 use std::convert::TryInto;
 use std::io;
 use std::ops::Add;
 use std::{convert::TryFrom, time::Duration};
 use wasm_timer::Instant;
-
-// TODO should tracker be its own protocol?
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub enum BttEventType {
