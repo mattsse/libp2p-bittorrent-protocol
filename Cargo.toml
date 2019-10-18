@@ -28,6 +28,7 @@ wasm-timer = "0.1"
 bendy = "0.2"
 chrono = "0.4.9"
 bitflags = "1.2.1"
+bit-vec = "0.6.1"
 
 [features]
 bencode = ["serde_bencode", "serde", "serde_derive"]
