@@ -6,7 +6,7 @@ use bendy::{
     decoding::{Error as DecodingError, ErrorKind, FromBencode, Object, ResultExt},
     encoding::{AsString, Error as EncodingError, ToBencode},
 };
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveDateTime, Utc, TimeZone, DateTime};
 use sha1::{Sha1, DIGEST_LENGTH};
 use std::convert::TryInto;
 use std::fmt;
@@ -57,6 +57,15 @@ impl MetaInfo {
         let data = self.to_bencode()?;
         let mut buffer = File::create(path)?;
         Ok(buffer.write_all(&data)?)
+    }
+
+    /// time of creation based on the epoch second timestamp
+    pub fn creation_time(&self) -> Option<DateTime<Utc>> {
+        if let Some(seconds) = &self.creation_date {
+            Some(Utc.timestamp(*seconds, 0))
+        } else {
+            None
+        }
     }
 }
 
@@ -256,6 +265,11 @@ impl TorrentInfo {
     pub fn is_dir(&self) -> bool {
         self.content.is_dir()
     }
+
+    #[inline]
+    pub fn last_piece_length(&self) -> u64 {
+        self.content.length() - (self.pieces.len() as u64 - 1) * self.piece_length as u64
+    }
 }
 
 impl ToBencode for TorrentInfo {
@@ -386,6 +400,15 @@ impl InfoContent {
     #[inline]
     pub fn is_dir(&self) -> bool {
         !self.is_file()
+    }
+
+    /// determines the overall length of the content
+    #[inline]
+    pub fn length(&self) -> u64 {
+        match self {
+            InfoContent::Single { length } => *length,
+            InfoContent::Multi { files } => files.iter().map(|f| f.length).sum(),
+        }
     }
 }
 
