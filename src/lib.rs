@@ -10,4 +10,3 @@ pub mod metainfo;
 pub mod peers;
 pub mod pieces;
 pub mod proto;
-pub mod torrent;

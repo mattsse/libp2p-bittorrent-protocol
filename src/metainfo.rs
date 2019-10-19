@@ -1,38 +1,68 @@
+use crate::bitfield::BitField;
+use chrono::NaiveDate;
 use sha1::Sha1;
-use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Eq, PartialEq)]
+pub struct MetaInfo {
+    /// urls of the trackers
+    pub announce: Option<String>,
+    /// takes precedence over `announce`
+    pub announce_list: Vec<String>,
+    /// BEP-0170
+    pub http_seeds: Vec<String>,
+    pub comment: Option<String>,
+    pub created_by: Option<String>,
+    pub creation_date: Option<i64>,
+    pub encoding: Option<String>,
+    pub info: TorrentInfo,
+    /// dht nodes to add to the routing table/bootstrap from
+    pub nodes: Vec<DhtNode>,
+    /// the hash that identifies this torrent
+    pub info_hash: Sha1,
+}
+
+impl MetaInfo {
+    #[inline]
+    pub fn is_tracker_less(&self) -> bool {
+        !self.nodes.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct DhtNode {
+    pub host: String,
+    pub port: u32,
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct TorrentInfo {
-    /// The URL of the tracker
-    pub annouce_url: String,
-    /// suggested name to save the file (or directory)
-    pub name: String,
-    /// number of bytes in each piece the file is split into
-    /// as power of two 2^14 (16 kb)
-    pub piece_length: u32,
-    /// each is a SHA1 hash of the piece at the corresponding index
+    pub num_pieces: u32,
     pub pieces: Vec<Sha1>,
-    /// the length of the
-    pub length: u64,
+    pub piece_length: u32,
+    // /// only merkle tree BEP-0030
+    // pub root_hash: Option<Vec<u8>>,
+    pub comment: Option<String>,
+    pub created_by: Option<String>,
     /// either single file or directory structure
-    pub file_info: FileInfo,
+    pub content: InfoContent,
+    pub name: String,
 }
 
 impl TorrentInfo {
     #[inline]
     pub fn is_file(&self) -> bool {
-        self.file_info.is_file()
+        self.content.is_file()
     }
 
     #[inline]
     pub fn is_dir(&self) -> bool {
-        self.file_info.is_dir()
+        self.content.is_dir()
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FileInfo {
+pub enum InfoContent {
     File {
         /// length in bytes
         length: u64,
@@ -42,11 +72,11 @@ pub enum FileInfo {
     },
 }
 
-impl FileInfo {
+impl InfoContent {
     #[inline]
     pub fn is_file(&self) -> bool {
         match self {
-            FileInfo::File { .. } => true,
+            InfoContent::File { .. } => true,
             _ => false,
         }
     }
@@ -79,4 +109,13 @@ impl SubFileInfo {
             .iter()
             .fold(PathBuf::new(), |mut buf, path| buf.join(path))
     }
+}
+
+/// TODO convert to bitflag
+#[derive(Copy, Debug, Clone, Eq, PartialEq)]
+pub enum TorrentType {
+    MultiFile,
+    Private,
+    I2P,
+    SSL,
 }
