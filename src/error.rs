@@ -1,4 +1,5 @@
-use bendy::decoding::Error as BError;
+use bendy::decoding::Error as DecodingError;
+use bendy::encoding::Error as EncodingError;
 use snafu::{Backtrace, Snafu};
 use std::io;
 
@@ -6,8 +7,10 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("Bencoding error: {}", err))]
-    Bencode { err: BError },
+    #[snafu(display("Bendecoding error: {}", err))]
+    BendecodingError { err: DecodingError },
+    #[snafu(display("Encoding error: {}", err))]
+    BencodingError { err: EncodingError },
     #[snafu(display("IO Err {}", err))]
     Io { err: io::Error },
 }
@@ -20,8 +23,13 @@ impl From<io::Error> for Error {
     }
 }
 
-impl From<BError> for Error {
-    fn from(err: BError) -> Error {
-        Error::Bencode { err }
+impl From<DecodingError> for Error {
+    fn from(err: DecodingError) -> Error {
+        Error::BendecodingError { err }
+    }
+}
+impl From<EncodingError> for Error {
+    fn from(err: EncodingError) -> Error {
+        Error::BencodingError { err }
     }
 }

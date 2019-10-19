@@ -1,16 +1,17 @@
 use crate::bitfield::BitField;
 use crate::error::Result;
 use bendy::decoding::{Decoder, DictDecoder, ListDecoder};
+use bendy::encoding::SingleItemEncoder;
 use bendy::{
-    decoding::{Error as BError, ErrorKind, FromBencode, Object, ResultExt},
-    encoding::{AsString, ToBencode},
+    decoding::{Error as DecodingError, ErrorKind, FromBencode, Object, ResultExt},
+    encoding::{AsString, Error as EncodingError, ToBencode},
 };
 use chrono::NaiveDate;
 use sha1::{Sha1, DIGEST_LENGTH};
 use std::convert::TryInto;
 use std::fmt;
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Eq, PartialEq)]
@@ -51,10 +52,50 @@ impl MetaInfo {
         file.read_to_end(&mut data)?;
         Ok(Self::from_bencode(&data)?)
     }
+
+    pub fn write_torrent_file<T: AsRef<Path>>(&self, path: T) -> Result<()> {
+        let data = self.to_bencode()?;
+        let mut buffer = File::create(path)?;
+        Ok(buffer.write_all(&data)?)
+    }
+}
+
+impl ToBencode for MetaInfo {
+    const MAX_DEPTH: usize = 3;
+
+    fn encode(&self, encoder: SingleItemEncoder) -> Result<(), EncodingError> {
+        encoder.emit_dict(|mut e| {
+            if let Some(announce) = &self.announce {
+                e.emit_pair(b"announce", announce)?;
+            }
+            if !self.announce_list.is_empty() {
+                e.emit_pair(b"announce list", &self.announce_list)?;
+            }
+            if let Some(comment) = &self.comment {
+                e.emit_pair(b"comment", comment)?;
+            }
+            if let Some(creation_date) = &self.creation_date {
+                e.emit_pair(b"creation date", creation_date)?;
+            }
+            if let Some(encoding) = &self.encoding {
+                e.emit_pair(b"encoding", encoding)?;
+            }
+            if !self.httpseeds.is_empty() {
+                e.emit_pair(b"httpseeds", &self.httpseeds)?;
+            }
+            if !self.nodes.is_empty() {
+                e.emit_pair(b"nodes", &self.nodes)?;
+            }
+            if !self.webseeds.is_empty() {
+                e.emit_pair(b"url-list", &self.webseeds)?;
+            }
+            e.emit_pair(b"info", &self.info)
+        })
+    }
 }
 
 impl FromBencode for MetaInfo {
-    fn decode_bencode_object(object: Object) -> Result<Self, BError>
+    fn decode_bencode_object(object: Object) -> Result<Self, DecodingError>
     where
         Self: Sized,
     {
@@ -146,8 +187,8 @@ impl FromBencode for MetaInfo {
             comment,
             creation_date,
             created_by,
-            info: info.ok_or(BError::missing_field("info"))?,
-            info_hash: info_hash.ok_or(BError::missing_field("info"))?,
+            info: info.ok_or(DecodingError::missing_field("info"))?,
+            info_hash: info_hash.ok_or(DecodingError::missing_field("info"))?,
             nodes,
         })
     }
@@ -159,18 +200,33 @@ pub struct DhtNode {
     pub port: u32,
 }
 
+impl ToBencode for DhtNode {
+    const MAX_DEPTH: usize = 1;
+
+    fn encode(&self, encoder: SingleItemEncoder) -> Result<(), EncodingError> {
+        encoder.emit_list(|e| {
+            e.emit_str(&self.host)?;
+            e.emit_int(self.port)
+        })
+    }
+}
+
 impl FromBencode for DhtNode {
     const EXPECTED_RECURSION_DEPTH: usize = 1;
-    fn decode_bencode_object(object: Object) -> Result<Self, BError>
+    fn decode_bencode_object(object: Object) -> Result<Self, DecodingError>
     where
         Self: Sized,
     {
         let mut list = object.try_into_list()?;
 
-        let host = list.next_object()?.ok_or(BError::missing_field("host"))?;
+        let host = list
+            .next_object()?
+            .ok_or(DecodingError::missing_field("host"))?;
         let host = String::decode_bencode_object(host)?;
 
-        let port = list.next_object()?.ok_or(BError::missing_field("port"))?;
+        let port = list
+            .next_object()?
+            .ok_or(DecodingError::missing_field("port"))?;
         let port = u32::decode_bencode_object(port)?;
 
         Ok(Self { host, port })
@@ -202,9 +258,34 @@ impl TorrentInfo {
     }
 }
 
+impl ToBencode for TorrentInfo {
+    const MAX_DEPTH: usize = 3;
+
+    fn encode(&self, encoder: SingleItemEncoder) -> Result<(), EncodingError> {
+        encoder.emit_dict(|mut e| {
+            match &self.content {
+                InfoContent::Single { length } => e.emit_pair(b"length", length),
+                InfoContent::Multi { files } => e.emit_pair(b"files", files),
+            }?;
+
+            e.emit_pair(b"name", &self.name)?;
+            e.emit_pair(b"piece length", &self.piece_length)?;
+
+            let data = self
+                .pieces
+                .iter()
+                .flat_map(|x| x.iter())
+                .map(|x| *x)
+                .collect::<Vec<_>>();
+
+            e.emit_pair(b"pieces", AsString(&data))
+        })
+    }
+}
+
 impl FromBencode for TorrentInfo {
     const EXPECTED_RECURSION_DEPTH: usize = 3;
-    fn decode_bencode_object(object: Object) -> Result<Self, BError>
+    fn decode_bencode_object(object: Object) -> Result<Self, DecodingError>
     where
         Self: Sized,
     {
@@ -240,7 +321,7 @@ impl FromBencode for TorrentInfo {
 
                 (b"files", value) => {
                     if length.is_some() {
-                        return return Err(BError::unexpected_field("files"));
+                        return return Err(DecodingError::unexpected_field("files"));
                     }
                     let mut sub_files = Vec::new();
                     let mut list = value.try_into_list()?;
@@ -251,7 +332,7 @@ impl FromBencode for TorrentInfo {
                 }
                 (b"length", value) => {
                     if files.is_some() {
-                        return return Err(BError::unexpected_field("length"));
+                        return return Err(DecodingError::unexpected_field("length"));
                     }
                     length = u64::decode_bencode_object(value)
                         .context("length")
@@ -274,10 +355,10 @@ impl FromBencode for TorrentInfo {
         };
 
         Ok(Self {
-            name: name.ok_or(BError::missing_field("name"))?,
-            piece_length: piece_length.ok_or(BError::missing_field("pieces length"))?,
-            pieces: pieces.ok_or(BError::missing_field("pieces"))?,
-            content: content.ok_or(BError::missing_field("length or files"))?,
+            name: name.ok_or(DecodingError::missing_field("name"))?,
+            piece_length: piece_length.ok_or(DecodingError::missing_field("pieces length"))?,
+            pieces: pieces.ok_or(DecodingError::missing_field("pieces"))?,
+            content: content.ok_or(DecodingError::missing_field("length or files"))?,
         })
     }
 }
@@ -332,9 +413,20 @@ impl SubFileInfo {
     }
 }
 
+impl ToBencode for SubFileInfo {
+    const MAX_DEPTH: usize = 2;
+
+    fn encode(&self, encoder: SingleItemEncoder) -> Result<(), EncodingError> {
+        encoder.emit_dict(|mut e| {
+            e.emit_pair(b"length", &self.length)?;
+            e.emit_pair(b"path", &self.paths)
+        })
+    }
+}
+
 impl FromBencode for SubFileInfo {
     const EXPECTED_RECURSION_DEPTH: usize = 2;
-    fn decode_bencode_object(object: Object) -> Result<Self, BError>
+    fn decode_bencode_object(object: Object) -> Result<Self, DecodingError>
     where
         Self: Sized,
     {
@@ -359,7 +451,7 @@ impl FromBencode for SubFileInfo {
                     paths = Some(path_list);
                 }
                 (unknown_field, _) => {
-                    return Err(BError::unexpected_field(String::from_utf8_lossy(
+                    return Err(DecodingError::unexpected_field(String::from_utf8_lossy(
                         unknown_field,
                     )));
                 }
@@ -367,8 +459,8 @@ impl FromBencode for SubFileInfo {
         }
 
         Ok(Self {
-            length: length.ok_or(BError::missing_field("length"))?,
-            paths: paths.ok_or(BError::missing_field("paths"))?,
+            length: length.ok_or(DecodingError::missing_field("length"))?,
+            paths: paths.ok_or(DecodingError::missing_field("paths"))?,
         })
     }
 }
@@ -387,7 +479,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn load_torrent() {
+    fn decode_torrent() {
         let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         dir.push("resources");
 
@@ -396,5 +488,43 @@ mod tests {
         file.read_to_end(&mut data).unwrap();
 
         let metainfo = MetaInfo::from_bencode(&data).unwrap();
+    }
+
+    #[test]
+    fn encode_torrent() {
+        let pieces: Result<Vec<[u8; DIGEST_LENGTH]>, _> = include_bytes!("../resources/pieces.iso")
+            .chunks(20)
+            .map(TryInto::try_into)
+            .collect();
+
+        let info = TorrentInfo {
+            piece_length: 262_144,
+            pieces: pieces.unwrap(),
+            name: "debian-9.4.0-amd64-netinst.iso".to_owned(),
+            content: InfoContent::Single {
+                length: 305_135_616,
+            },
+        };
+
+        let info_hash = Sha1::from(&info.to_bencode().unwrap());
+
+        let torrent = MetaInfo {
+            announce: Some("http://bttracker.debian.org:6969/announce".to_owned()),
+            announce_list: vec![],
+            comment: Some("\"Debian CD from cdimage.debian.org\"".to_owned()),
+            created_by: None,
+            creation_date: Some(1_520_682_848),
+            encoding: None,
+            httpseeds: vec![
+                "https://cdimage.debian.org/cdimage/release/9.4.0//srv/cdbuilder.debian.org/dst/deb-cd/weekly-builds/amd64/iso-cd/debian-9.4.0-amd64-netinst.iso".to_owned(),
+                "https://cdimage.debian.org/cdimage/archive/9.4.0//srv/cdbuilder.debian.org/dst/deb-cd/weekly-builds/amd64/iso-cd/debian-9.4.0-amd64-netinst.iso".to_owned(),
+            ],
+            webseeds: vec![],
+            info,
+            nodes: vec![],
+            info_hash,
+        };
+
+        let data = torrent.write_torrent_file("dummy.torrent").unwrap();
     }
 }
