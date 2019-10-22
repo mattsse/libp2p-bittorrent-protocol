@@ -118,6 +118,24 @@ impl TorrentBuilder {
         }
     }
 
+    fn file_info_paths<P: AsRef<Path>>(&self, path: P) -> io::Result<Vec<String>> {
+        let path = path.as_ref();
+
+        let prefix = path
+            .strip_prefix(&self.content_root)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        let paths: Result<Vec<_>, _> = prefix
+            .iter()
+            .map(|x| x.to_os_string().into_string())
+            .collect();
+        paths.map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("Invalid filename for {}", path.display()),
+            )
+        })
+    }
+
     /// returns the length of the file and the hashed pieces and potential unfinished bits
     fn read_file<P: AsRef<Path>>(
         &self,
@@ -126,10 +144,14 @@ impl TorrentBuilder {
         mut overlap: Option<(usize, Sha1)>,
     ) -> io::Result<(SubFileInfo, Vec<Sha1>, Option<(usize, Sha1)>)> {
         let path = path.as_ref();
+        let length = path.metadata()?.len() as usize;
+        let file_info = SubFileInfo {
+            length: length as u64,
+            paths: self.file_info_paths(path)?,
+        };
 
         let mut file = BufReader::new(::std::fs::File::open(path)?);
 
-        let length = path.metadata()?.len() as usize;
         let mut pieces = Vec::with_capacity(length / piece_length);
         let mut total_read = 0;
         let mut piece_overlap = None;
@@ -138,11 +160,26 @@ impl TorrentBuilder {
             let left = piece_length - previous_read;
             if left <= length {
                 let mut buf = Vec::with_capacity(left);
-
                 file.read_exact(&mut buf)?;
-                hasher.update(&mut buf);
+                hasher.update(&buf);
                 pieces.push(hasher);
                 total_read += left;
+            } else {
+                let mut buf = Vec::with_capacity(length);
+                let read = file.read_to_end(&mut buf)?;
+                if read != length {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "Expected to read {} from file {}, but got {}",
+                            length,
+                            read,
+                            path.display()
+                        ),
+                    ));
+                }
+                hasher.update(&buf);
+                return Ok((file_info, pieces, Some((previous_read + read, hasher))));
             }
         }
 
@@ -164,23 +201,6 @@ impl TorrentBuilder {
             total_read += piece_length;
         }
 
-        let prefix = path
-            .strip_prefix(&self.content_root)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-        let paths: Result<Vec<_>, _> = prefix
-            .iter()
-            .map(|x| x.to_os_string().into_string())
-            .collect();
-
-        let info = SubFileInfo {
-            length: length as u64,
-            paths: paths.map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("Invalid filename for {}", path.display()),
-                )
-            })?,
-        };
-        Ok((info, pieces, piece_overlap))
+        Ok((file_info, pieces, piece_overlap))
     }
 }
