@@ -1,12 +1,13 @@
 use crate::bitfield::BitField;
 use crate::error::Result;
+use crate::util::{ShaHash, SHA_HASH_LEN};
 use bendy::decoding::{Decoder, DictDecoder, ListDecoder};
 use bendy::encoding::SingleItemEncoder;
 use bendy::{
     decoding::{Error as DecodingError, ErrorKind, FromBencode, Object, ResultExt},
     encoding::{AsString, Error as EncodingError, ToBencode},
 };
-use chrono::{NaiveDate, NaiveDateTime, Utc, TimeZone, DateTime};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use sha1::{Sha1, DIGEST_LENGTH};
 use std::convert::TryInto;
 use std::fmt;
@@ -244,7 +245,7 @@ impl FromBencode for DhtNode {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct TorrentInfo {
-    pub pieces: Vec<[u8; DIGEST_LENGTH]>,
+    pub pieces: Vec<ShaHash>,
     /// number of bytes in each piece the file is split into
     pub piece_length: u32,
     // /// only merkle tree BEP-0030
@@ -270,6 +271,12 @@ impl TorrentInfo {
     pub fn last_piece_length(&self) -> u64 {
         self.content.length() - (self.pieces.len() as u64 - 1) * self.piece_length as u64
     }
+
+    /// computes the sha1 hash from the bencoded form of this info
+    pub fn sha1_hash(&self) -> Result<Sha1> {
+        let data = self.to_bencode()?;
+        Ok(Sha1::from(&data))
+    }
 }
 
 impl ToBencode for TorrentInfo {
@@ -288,7 +295,7 @@ impl ToBencode for TorrentInfo {
             let data = self
                 .pieces
                 .iter()
-                .flat_map(|x| x.iter())
+                .flat_map(|x| x.as_ref().iter())
                 .map(|x| *x)
                 .collect::<Vec<_>>();
 
@@ -325,12 +332,15 @@ impl FromBencode for TorrentInfo {
                 }
 
                 (b"pieces", value) => {
-                    let piece_res: Result<Vec<[u8; DIGEST_LENGTH]>, _> = value
+                    let piece_res: Result<Vec<ShaHash>, _> = value
                         .try_into_bytes()?
-                        .chunks(20)
+                        .chunks(SHA_HASH_LEN)
                         .map(TryInto::try_into)
                         .collect();
-                    pieces = Some(piece_res?);
+                    pieces =
+                        Some(piece_res.map_err(|_| {
+                            DecodingError::unexpected_field("malformed pieces chunks")
+                        })?);
                 }
 
                 (b"files", value) => {
@@ -515,8 +525,8 @@ mod tests {
 
     #[test]
     fn encode_torrent() {
-        let pieces: Result<Vec<[u8; DIGEST_LENGTH]>, _> = include_bytes!("../resources/pieces.iso")
-            .chunks(20)
+        let pieces: Result<Vec<ShaHash>, _> = include_bytes!("../resources/pieces.iso")
+            .chunks(SHA_HASH_LEN)
             .map(TryInto::try_into)
             .collect();
 
