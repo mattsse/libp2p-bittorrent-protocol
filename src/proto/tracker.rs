@@ -1,4 +1,5 @@
-use crate::proto::BttPeer;
+use crate::peer::Peer;
+use crate::util::ShaHash;
 use sha1::Sha1;
 use std::convert::TryInto;
 use std::io;
@@ -7,17 +8,17 @@ use std::{convert::TryFrom, time::Duration};
 use wasm_timer::Instant;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
-pub enum BttEventType {
+pub enum EventType {
     Started = 1,
     Completed = 2,
     Stopped = 3,
 }
 
 #[derive(Clone, PartialEq, Eq)]
-pub struct BttTrackerRequestMsg {
-    pub info_hash: Sha1,
+pub struct TrackerRequestMsg {
+    pub info_hash: ShaHash,
 
-    pub peer: BttPeer,
+    pub peer: Peer,
 
     pub uploaded: u64,
 
@@ -27,11 +28,11 @@ pub struct BttTrackerRequestMsg {
 
     pub numwant: u32,
 
-    pub event: Option<BttEventType>,
+    pub event: Option<EventType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BttTrackerResponseMsg {
+pub enum TrackerResponseMsg {
     Failure {
         reason: String,
     },
@@ -45,6 +46,6 @@ pub enum BttTrackerResponseMsg {
         /// Minimum announce interval
         min_interval: Option<Duration>,
         /// matching peers
-        peers: Vec<BttPeer>,
+        peers: Vec<Peer>,
     },
 }
