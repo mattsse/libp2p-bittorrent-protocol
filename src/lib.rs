@@ -8,9 +8,9 @@ pub mod bitfield;
 pub mod disk;
 pub mod error;
 pub mod handler;
-pub mod metainfo;
 pub mod peer;
 pub mod pieces;
 pub mod proto;
-pub mod torrentbuilder;
+
+pub mod torrent;
 pub mod util;

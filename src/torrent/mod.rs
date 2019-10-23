@@ -1,3 +1,5 @@
+pub mod builder;
+
 use crate::bitfield::BitField;
 use crate::error::Result;
 use crate::util::{ShaHash, SHA_HASH_LEN};
@@ -54,10 +56,11 @@ impl MetaInfo {
         Ok(Self::from_bencode(&data)?)
     }
 
-    pub fn write_torrent_file<T: AsRef<Path>>(&self, path: T) -> Result<()> {
+    pub fn write_torrent_file<T: AsRef<Path>>(&self, path: T) -> Result<Vec<u8>> {
         let data = self.to_bencode()?;
         let mut buffer = File::create(path)?;
-        Ok(buffer.write_all(&data)?)
+        buffer.write_all(&data)?;
+        Ok(data)
     }
 
     /// time of creation based on the epoch second timestamp
@@ -247,7 +250,7 @@ impl FromBencode for DhtNode {
 pub struct TorrentInfo {
     pub pieces: Vec<ShaHash>,
     /// number of bytes in each piece the file is split into
-    pub piece_length: u32,
+    pub piece_length: u64,
     // /// only merkle tree BEP-0030
     // pub root_hash: Option<Vec<u8>>,
     /// either single file or directory structure
@@ -269,7 +272,7 @@ impl TorrentInfo {
 
     #[inline]
     pub fn last_piece_length(&self) -> u64 {
-        self.content.length() - (self.pieces.len() as u64 - 1) * self.piece_length as u64
+        self.content.length() - (self.pieces.len() as u64 - 1) * self.piece_length
     }
 
     /// computes the sha1 hash from the bencoded form of this info
@@ -326,7 +329,7 @@ impl FromBencode for TorrentInfo {
                         .map(Some)?
                 }
                 (b"piece length", value) => {
-                    piece_length = u32::decode_bencode_object(value)
+                    piece_length = u64::decode_bencode_object(value)
                         .context("piece length")
                         .map(Some)?
                 }
@@ -516,19 +519,22 @@ mod tests {
         let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         dir.push("resources");
 
-        let mut file = File::open(dir.join("debian-9.4.0-amd64-netinst.iso.torrent")).unwrap();
-        let mut data = Vec::new();
-        file.read_to_end(&mut data).unwrap();
-
-        let metainfo = MetaInfo::from_bencode(&data).unwrap();
+        let metainfo =
+            MetaInfo::from_torrent_file(dir.join("debian-9.4.0-amd64-netinst.iso.torrent"))
+                .unwrap();
     }
 
     #[test]
     fn encode_torrent() {
-        let pieces: Result<Vec<ShaHash>, _> = include_bytes!("../resources/pieces.iso")
-            .chunks(SHA_HASH_LEN)
-            .map(TryInto::try_into)
-            .collect();
+        let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        dir.push("resources");
+
+        let mut data = Vec::new();
+        let mut file = File::open(dir.join("pieces.iso")).unwrap();
+        file.read_to_end(&mut data).unwrap();
+
+        let pieces: Result<Vec<ShaHash>, _> =
+            data.chunks(SHA_HASH_LEN).map(TryInto::try_into).collect();
 
         let info = TorrentInfo {
             piece_length: 262_144,

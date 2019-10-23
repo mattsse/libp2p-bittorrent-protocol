@@ -1,6 +1,6 @@
 use crate::disk::block::{Block, BlockMut};
 use crate::disk::error::TorrentError;
-use crate::metainfo::MetaInfo;
+use crate::torrent::MetaInfo;
 use crate::util::ShaHash;
 
 /// Messages that can be sent to the `DiskManager`.

@@ -1,4 +1,8 @@
-pub const BLOCK_SIZE: usize = 16 * 2 ^ 10;
+/// smallest allowed piece size : 16 KB
+pub const BLOCK_SIZE_MIN: usize = 16384;
+
+/// greatest allowed piece size: 16 MB
+pub const BLOCK_SIZE_MAX: usize = 16777216;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Piece {
