@@ -1,3 +1,4 @@
+use crate::pieces::BLOCK_SIZE_MAX;
 use crate::proto::message::PeerMessage;
 use bytes::{BigEndian, Buf, BytesMut, IntoBuf};
 use std::io;
@@ -11,7 +12,10 @@ pub struct BttBytesCodec {
 
 impl Default for BttBytesCodec {
     fn default() -> Self {
-        unimplemented!()
+        Self {
+            // length(4) + identifier(1) + payload (index(4) + offset(4) + max allowed blocksize)
+            max: 4 + 1 + 8 + BLOCK_SIZE_MAX,
+        }
     }
 }
 

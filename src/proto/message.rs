@@ -2,6 +2,7 @@ use crate::bitfield::BitField;
 use crate::pieces::Piece;
 use crate::util::ShaHash;
 use byteorder::{BigEndian, WriteBytesExt};
+use std::io::{self, Write};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerRequest {
@@ -71,8 +72,72 @@ impl PeerMessage {
         }
     }
 
-    pub fn write_to_bytes(self) -> Result<Vec<u8>, ()> {
+    pub fn write_to_bytes(&self) -> io::Result<Vec<u8>> {
         let mut buf = Vec::with_capacity(self.reserve_bytes_len());
+        match self {
+            PeerMessage::KeepAlive => buf.write_u32::<BigEndian>(0)?,
+            PeerMessage::Choke => {
+                buf.write_u32::<BigEndian>(1)?;
+                buf.write_u8(0)?;
+            }
+            PeerMessage::UnChoke => {
+                buf.write_u32::<BigEndian>(1)?;
+                buf.write_u8(1)?;
+            }
+            PeerMessage::Interested => {
+                buf.write_u32::<BigEndian>(1)?;
+                buf.write_u8(2)?;
+            }
+            PeerMessage::NotInterested => {
+                buf.write_u32::<BigEndian>(1)?;
+                buf.write_u8(3)?;
+            }
+            PeerMessage::Have { index } => {
+                buf.write_u32::<BigEndian>(5)?;
+                buf.write_u8(4)?;
+                buf.write_u32::<BigEndian>(*index)?;
+            }
+            PeerMessage::Bitfield { index_field } => {
+                let bytes = index_field.to_bytes();
+                buf.write_u32::<BigEndian>(1 + bytes.len() as u32)?;
+                buf.write_u8(5)?;
+                buf.write_all(&bytes)?;
+            }
+            PeerMessage::Request { peer_request } => {
+                buf.write_u32::<BigEndian>(13)?;
+                buf.write_u8(6)?;
+                buf.write_u32::<BigEndian>(peer_request.index)?;
+                buf.write_u32::<BigEndian>(peer_request.begin)?;
+                buf.write_u32::<BigEndian>(peer_request.length)?;
+            }
+            PeerMessage::Piece { piece } => {
+                buf.write_u32::<BigEndian>(9 + piece.block.len() as u32)?;
+                buf.write_u8(7)?;
+                buf.write_u32::<BigEndian>(piece.index)?;
+                buf.write_u32::<BigEndian>(piece.begin)?;
+                buf.write_all(&piece.block)?;
+            }
+            PeerMessage::Cancel { peer_request } => {
+                buf.write_u32::<BigEndian>(13)?;
+                buf.write_u8(8)?;
+                buf.write_u32::<BigEndian>(peer_request.index)?;
+                buf.write_u32::<BigEndian>(peer_request.begin)?;
+                buf.write_u32::<BigEndian>(peer_request.length)?;
+            }
+            PeerMessage::Port { port } => {
+                buf.write_u32::<BigEndian>(3)?;
+                buf.write_u8(9)?;
+                buf.write_u32::<BigEndian>(*port)?;
+            }
+            PeerMessage::Handshake { handshake } => {
+                let pstr = handshake.pstr.as_bytes();
+                buf.write_u8(pstr.len() as u8)?;
+                buf.write_all(pstr)?;
+                buf.write_all(&handshake.reserved)?;
+                buf.write_all(handshake.info_hash.as_ref())?;
+                buf.write_all(handshake.peer_id.as_ref())?;
+            }
+        }
 
         Ok(buf)
     }
