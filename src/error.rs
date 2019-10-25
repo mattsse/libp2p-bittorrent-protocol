@@ -1,3 +1,4 @@
+use crate::disk::error::TorrentError;
 use bendy::decoding::Error as DecodingError;
 use bendy::encoding::Error as EncodingError;
 use snafu::{Backtrace, Snafu};
@@ -13,9 +14,19 @@ pub enum Error {
     BencodingError { err: EncodingError },
     #[snafu(display("IO Err {}", err))]
     Io { err: io::Error },
+    #[snafu(display("{}", err))]
+    Torrent { err: TorrentError },
+    #[snafu(display("{}", msg))]
+    Message { msg: String },
 }
 
-impl Error {}
+impl Error {
+    pub fn message<T: ToString>(msg: T) -> Self {
+        Error::Message {
+            msg: msg.to_string(),
+        }
+    }
+}
 
 impl From<io::Error> for Error {
     fn from(err: io::Error) -> Error {
@@ -28,8 +39,15 @@ impl From<DecodingError> for Error {
         Error::BendecodingError { err }
     }
 }
+
 impl From<EncodingError> for Error {
     fn from(err: EncodingError) -> Error {
         Error::BencodingError { err }
+    }
+}
+
+impl From<TorrentError> for Error {
+    fn from(err: TorrentError) -> Error {
+        Error::Torrent { err }
     }
 }

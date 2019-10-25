@@ -17,6 +17,20 @@ impl BitField {
         }
         None
     }
+
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        Self {
+            inner: BitVec::from_bytes(bytes),
+        }
+    }
+}
+
+impl<T: Into<BitVec>> From<T> for BitField {
+    fn from(bitvec: T) -> Self {
+        Self {
+            inner: bitvec.into(),
+        }
+    }
 }
 
 impl Deref for BitField {

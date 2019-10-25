@@ -20,6 +20,14 @@ pub enum PieceState {
     Owned = 1,
 }
 
+#[derive(Copy, Debug, Clone, Eq, PartialEq)]
+pub enum PieceSelection {
+    SuperSeeding,
+    StrictPriority,
+    RarestFirst,
+    Endgame,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct IndexRange {
     pub begin: usize,

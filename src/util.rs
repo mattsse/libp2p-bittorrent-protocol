@@ -1,3 +1,4 @@
+use libp2p_core::multiaddr::multihash;
 use sha1::Sha1;
 use std::convert::{TryFrom, TryInto};
 
@@ -17,6 +18,13 @@ impl ShaHash {
         Self {
             hash: sha.digest().bytes(),
         }
+    }
+
+    pub fn random() -> Self {
+        multihash::Multihash::random(multihash::Hash::SHA1)
+            .digest()
+            .try_into()
+            .unwrap()
     }
 
     #[inline]
@@ -66,5 +74,15 @@ impl PartialEq<[u8]> for ShaHash {
             .iter()
             .zip(other.iter())
             .fold(is_equal, |prev, (h, o)| prev && h == o)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn random_sha1() {
+        let _ = ShaHash::random();
     }
 }
