@@ -375,7 +375,7 @@ mod tests {
         let meta = MetaInfo::from_torrent_file(dir.join("debian-9.4.0-amd64-netinst.iso.torrent"))
             .unwrap();
 
-        let build = TorrentBuilder::new(dir.join("pieces")).announce("http://bttracker.debian.org:6969/announce")
+        let build = TorrentBuilder::new(dir.join("pieces.iso")).announce("http://bttracker.debian.org:6969/announce")
             .comment("\"Debian CD from cdimage.debian.org\"")
             .httpseeds(&[ "https://cdimage.debian.org/cdimage/release/9.4.0//srv/cdbuilder.debian.org/dst/deb-cd/weekly-builds/amd64/iso-cd/debian-9.4.0-amd64-netinst.iso",
                 "https://cdimage.debian.org/cdimage/archive/9.4.0//srv/cdbuilder.debian.org/dst/deb-cd/weekly-builds/amd64/iso-cd/debian-9.4.0-amd64-netinst.iso"])
