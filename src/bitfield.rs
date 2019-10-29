@@ -1,4 +1,4 @@
-use crate::pieces::PieceState;
+use crate::piece::PieceState;
 use bit_vec::BitVec;
 use bitflags::_core::ops::{Deref, DerefMut};
 
