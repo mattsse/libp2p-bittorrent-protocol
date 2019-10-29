@@ -1,6 +1,10 @@
 use libp2p_core::multiaddr::multihash;
-use sha1::Sha1;
+use sha1::{Digest, Sha1};
 use std::convert::{TryFrom, TryInto};
+use std::fmt;
+use std::fs;
+use std::io::{self, BufReader, Read};
+use std::path::Path;
 
 /// Length of a SHA-1 hash.
 pub const SHA_HASH_LEN: usize = 20;
@@ -20,11 +24,31 @@ impl ShaHash {
         }
     }
 
+    pub fn bytes(&self) -> &[u8; 20] {
+        &self.hash
+    }
+
     pub fn random() -> Self {
         multihash::Multihash::random(multihash::Hash::SHA1)
             .digest()
             .try_into()
             .unwrap()
+    }
+
+    pub fn for_file<T: AsRef<Path>>(file: T) -> io::Result<Self> {
+        let mut file = BufReader::new(fs::File::open(file)?);
+
+        let mut hasher = Sha1::default();
+
+        let mut buffer = [0u8; 1024];
+        loop {
+            let bytes_read = file.read(&mut buffer)?;
+            hasher.update(&buffer[..bytes_read]);
+            if bytes_read == 0 {
+                break;
+            }
+        }
+        Ok(hasher.digest().bytes().into())
     }
 
     #[inline]
@@ -51,6 +75,14 @@ impl From<[u8; SHA_HASH_LEN]> for ShaHash {
     }
 }
 
+impl From<Sha1> for ShaHash {
+    fn from(hasher: Sha1) -> ShaHash {
+        ShaHash {
+            hash: hasher.digest().bytes(),
+        }
+    }
+}
+
 impl TryFrom<&[u8]> for ShaHash {
     type Error = ();
 
@@ -74,6 +106,20 @@ impl PartialEq<[u8]> for ShaHash {
             .iter()
             .zip(other.iter())
             .fold(is_equal, |prev, (h, o)| prev && h == o)
+    }
+}
+impl PartialEq<Sha1> for ShaHash {
+    fn eq(&self, other: &Sha1) -> bool {
+        self.hash == other.digest().bytes()
+    }
+}
+
+impl fmt::Display for ShaHash {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        for i in self.hash.iter() {
+            write!(f, "{:08x}", i)?
+        }
+        Ok(())
     }
 }
 
