@@ -5,21 +5,14 @@ use std::ops::{Deref, DerefMut};
 /// `BlockMetadata` which tracks metadata associated with a `Block` of memory.
 #[derive(Copy, Clone, Hash, PartialEq, Eq, Debug)]
 pub struct BlockMetadata {
-    info_hash: ShaHash,
-    piece_index: u64,
-    block_offset: u64,
-    block_length: usize,
+    pub piece_index: u64,
+    pub block_offset: u64,
+    pub block_length: usize,
 }
 
 impl BlockMetadata {
-    pub fn new(
-        info_hash: ShaHash,
-        piece_index: u64,
-        block_offset: u64,
-        block_length: usize,
-    ) -> BlockMetadata {
+    pub fn new(piece_index: u64, block_offset: u64, block_length: usize) -> BlockMetadata {
         BlockMetadata {
-            info_hash,
             piece_index,
             block_offset,
             block_length,
@@ -31,16 +24,7 @@ impl BlockMetadata {
         block_offset: u64,
         block_length: usize,
     ) -> BlockMetadata {
-        BlockMetadata::new(
-            [0u8; SHA_HASH_LEN].into(),
-            piece_index,
-            block_offset,
-            block_length,
-        )
-    }
-
-    pub fn info_hash(&self) -> ShaHash {
-        self.info_hash
+        BlockMetadata::new(piece_index, block_offset, block_length)
     }
 
     pub fn piece_index(&self) -> u64 {
@@ -58,7 +42,7 @@ impl BlockMetadata {
 
 impl Default for BlockMetadata {
     fn default() -> BlockMetadata {
-        BlockMetadata::new([0u8; SHA_HASH_LEN].into(), 0, 0, 0)
+        BlockMetadata::new(0, 0, 0)
     }
 }
 
@@ -111,11 +95,22 @@ pub struct BlockMut {
 
 impl BlockMut {
     /// Create a new `BlockMut`.
-    pub fn new(metadata: BlockMetadata, block_data: BytesMut) -> BlockMut {
-        BlockMut {
+    pub fn new(metadata: BlockMetadata, block_data: BytesMut) -> Self {
+        Self {
             metadata,
             block_data,
         }
+    }
+
+    pub fn empty_for_metadata(metadata: BlockMetadata) -> Self {
+        Self {
+            block_data: BytesMut::with_capacity(metadata.block_length),
+            metadata,
+        }
+    }
+
+    pub fn bytes_mut(&mut self) -> &mut BytesMut {
+        &mut self.block_data
     }
 
     /// Access the metadata for the block.
@@ -123,7 +118,7 @@ impl BlockMut {
         self.metadata
     }
 
-    pub fn into_parts(self) -> (BlockMetadata, BytesMut) {
+    pub fn split_into(self) -> (BlockMetadata, BytesMut) {
         (self.metadata, self.block_data)
     }
 }

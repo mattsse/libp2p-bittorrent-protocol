@@ -1,5 +1,7 @@
+use crate::torrent::MetaInfo;
 use crate::util::ShaHash;
 use sha1::Sha1;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Clone, Eq, PartialEq, Hash)]
@@ -33,4 +35,9 @@ pub struct FileStorage {
     pub num_pieces: u32,
 }
 
-pub struct FileHandle {}
+#[derive(Debug)]
+pub struct FileHandle {
+    /// the torrent's info
+    meta: MetaInfo,
+    files: HashMap<u32, Option<tokio_fs::File>>,
+}
