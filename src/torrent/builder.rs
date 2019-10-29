@@ -1,5 +1,5 @@
 use crate::error::Error;
-use crate::pieces::{BLOCK_SIZE_MAX, BLOCK_SIZE_MIN};
+use crate::piece::{BLOCK_SIZE_MAX, BLOCK_SIZE_MIN};
 use crate::torrent::{DhtNode, InfoContent, MetaInfo, SubFileInfo, TorrentInfo};
 use chrono::{DateTime, TimeZone, Utc};
 use futures::future::ok;

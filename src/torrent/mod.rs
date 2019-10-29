@@ -280,6 +280,11 @@ impl TorrentInfo {
         let data = self.to_bencode()?;
         Ok(Sha1::from(&data))
     }
+
+    #[inline]
+    pub fn last_piece_size(&self) -> usize {
+        (self.content.length() % self.piece_length) as usize
+    }
 }
 
 impl ToBencode for TorrentInfo {
