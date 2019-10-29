@@ -9,7 +9,7 @@ pub mod disk;
 pub mod error;
 pub mod handler;
 pub mod peer;
-pub mod pieces;
+pub mod piece;
 pub mod proto;
 
 pub mod torrent;
