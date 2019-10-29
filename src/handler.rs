@@ -461,7 +461,7 @@ where
 fn process_btt_in<TUserData>(
     event: PeerMessage,
 ) -> Result<BittorrentHandlerEvent<TUserData>, io::Error> {
-     match event {
+    match event {
         PeerMessage::Handshake { handshake } => {
             Ok(BittorrentHandlerEvent::HandshakeIn { handshake })
         }
@@ -470,7 +470,6 @@ fn process_btt_in<TUserData>(
         }
         _ => unreachable!(),
     }
-
 }
 
 /// Process a Bittorrent message that's supposed to be a response to one of our requests.
