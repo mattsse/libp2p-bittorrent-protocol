@@ -1,6 +1,6 @@
 use crate::bitfield::BitField;
 use crate::error::Error;
-use crate::pieces::Piece;
+use crate::piece::Piece;
 use crate::util::ShaHash;
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use std::convert::TryInto;

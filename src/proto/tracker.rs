@@ -1,4 +1,5 @@
-use crate::peer::Peer;
+// TODO use a struct that is compliant with the tracker spec
+use crate::peer::BttPeer;
 use crate::util::ShaHash;
 use sha1::Sha1;
 use std::convert::TryInto;
@@ -18,7 +19,7 @@ pub enum EventType {
 pub struct TrackerRequestMsg {
     pub info_hash: ShaHash,
 
-    pub peer: Peer,
+    pub peer: BttPeer,
 
     pub uploaded: u64,
 
@@ -46,6 +47,13 @@ pub enum TrackerResponseMsg {
         /// Minimum announce interval
         min_interval: Option<Duration>,
         /// matching peers
-        peers: Vec<Peer>,
+        peers: Vec<BttPeer>,
     },
+}
+
+/// Return format of the peer info returned BitTorrent tracker.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum PeerInfoFormat {
+    NotCompact = 0,
+    Compact = 1,
 }

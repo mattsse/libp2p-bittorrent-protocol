@@ -1,6 +1,6 @@
 use crate::bitfield::BitField;
 use crate::error::Error;
-use crate::pieces::{Piece, BLOCK_SIZE_MAX};
+use crate::piece::{Piece, BLOCK_SIZE_MAX};
 use crate::proto::message::{Handshake, PeerMessage, PeerRequest};
 use byteorder::{BigEndian, ByteOrder};
 use bytes::{Buf, BufMut, BytesMut, IntoBuf};
