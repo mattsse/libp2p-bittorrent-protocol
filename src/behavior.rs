@@ -41,14 +41,6 @@ where
     /// Queued events to return when the behaviour is being polled.
     queued_events:
         VecDeque<NetworkBehaviourAction<BittorrentHandlerIn<TorrentId>, BittorrentEvent>>,
-    /// cannot be higher than the active torrents
-    max_simultaneous_downloads: usize,
-    /// new torrents won't start if more are seeded/leeched
-    max_active_torrents: usize,
-    /// move finished downloads
-    move_completed_downloads: Option<PathBuf>,
-    /// how the initial pieces to download are selected
-    initial_piece_selection: PieceSelection,
     /// Marker to pin the generics.
     marker: PhantomData<TSubstream>,
 }
@@ -58,8 +50,18 @@ where
     TFileSystem: FileSystem,
 {
     /// Creates a new `Bittorrent` network behaviour with the given configuration.
-    pub fn with_config(id: PeerId, filesystem: TFileSystem, config: BittorrentConfig) -> Self {
-        unimplemented!()
+    pub fn with_config<T: Into<TFileSystem>>(
+        peer_id: PeerId,
+        filesystem: T,
+        config: BittorrentConfig,
+    ) -> Self {
+        Self {
+            disk_manager: DiskManager::with_capacity(filesystem.into(), 100),
+            torrents: TorrentPool::new(peer_id, config),
+            connected_peers: FnvHashSet::default(),
+            queued_events: VecDeque::default(),
+            marker: PhantomData,
+        }
     }
 
     /// start handshaking with peers for specific hash
@@ -167,21 +169,23 @@ where
 #[derive(Debug, Clone)]
 pub struct BittorrentConfig {
     /// cannot be higher than the active torrents
-    max_simultaneous_downloads: Option<usize>,
+    pub max_simultaneous_downloads: Option<usize>,
     /// new torrents won't start if more are seeded/leeched
-    max_active_torrents: Option<usize>,
+    pub max_active_torrents: Option<usize>,
     /// move finished downloads
-    move_completed_downloads: Option<PathBuf>,
+    pub move_completed_downloads: Option<PathBuf>,
     /// torrents that are not done yet
-    resume_leech: Option<Vec<PathBuf>>,
+    pub resume_leech: Option<Vec<PathBuf>>,
     /// files to seed
-    files_to_seed: Option<Vec<TorrentSeed>>,
+    pub files_to_seed: Option<Vec<TorrentSeed>>,
     /// how the initial pieces to download are selected
-    initial_piece_selection: Option<PieceSelection>,
+    pub initial_piece_selection: Option<PieceSelection>,
+    /// the bittorrent peer hash used for the client
+    pub peer_hash: Option<ShaHash>,
 }
 
 impl BittorrentConfig {
-    const MAX_ACTIVE_TORRENTS: usize = 5;
+    pub const MAX_ACTIVE_TORRENTS: usize = 5;
 }
 
 impl Default for BittorrentConfig {
@@ -193,6 +197,7 @@ impl Default for BittorrentConfig {
             move_completed_downloads: None,
             resume_leech: None,
             files_to_seed: None,
+            peer_hash: None,
         }
     }
 }
@@ -310,8 +315,6 @@ where
         }
     }
 }
-
-// Events
 
 /// The events produced by the `Bittorrent` behaviour.
 ///

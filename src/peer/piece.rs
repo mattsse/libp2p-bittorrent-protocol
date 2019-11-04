@@ -1,4 +1,4 @@
-use crate::behavior::SeedLeechConfig;
+use crate::behavior::{BittorrentConfig, SeedLeechConfig};
 use crate::bitfield::BitField;
 use crate::disk::block::{Block, BlockMetadata, BlockMut};
 use crate::disk::error::TorrentError;
@@ -10,6 +10,7 @@ use fnv::FnvHashMap;
 use libp2p_core::PeerId;
 use std::collections::VecDeque;
 use std::convert::TryInto;
+use std::path::PathBuf;
 use std::time::Duration;
 use wasm_timer::Instant;
 
@@ -22,6 +23,14 @@ pub struct TorrentPool<TInner> {
     pub local_peer_id: PeerId,
     torrents: FnvHashMap<TorrentId, Torrent<TInner>>,
     timeout: Duration,
+    /// cannot be higher than the active torrents
+    max_simultaneous_downloads: usize,
+    /// new torrents won't start if more are seeded/leeched
+    max_active_torrents: usize,
+    /// move finished downloads
+    move_completed_downloads: Option<PathBuf>,
+    /// how the initial pieces to download are selected
+    initial_piece_selection: PieceSelection,
 }
 
 /// The observable states emitted by [`TorrentPool::poll`].
@@ -42,18 +51,29 @@ pub enum TorrentPoolState<'a, TInner> {
 }
 
 impl<TInner> TorrentPool<TInner> {
+    pub fn new(local_peer_id: PeerId, config: BittorrentConfig) -> Self {
+        let local_peer_hash = config.peer_hash.unwrap_or_else(|| ShaHash::random());
+        let max_simultaneous_downloads = config
+            .max_simultaneous_downloads
+            .unwrap_or(BittorrentConfig::MAX_ACTIVE_TORRENTS);
+        let max_active_torrents = config
+            .max_active_torrents
+            .unwrap_or(BittorrentConfig::MAX_ACTIVE_TORRENTS);
+        Self {
+            local_peer_hash,
+            local_peer_id,
+            torrents: FnvHashMap::default(),
+            timeout: Duration::from_secs(120),
+            max_simultaneous_downloads,
+            max_active_torrents,
+            move_completed_downloads: config.move_completed_downloads,
+            initial_piece_selection: config.initial_piece_selection.unwrap_or_default(),
+        }
+    }
+
     /// Returns an iterator over the pieces in the pool.
     pub fn iter(&self) -> impl Iterator<Item = &Torrent<TInner>> {
         self.torrents.values()
-    }
-
-    pub fn new<T: Into<ShaHash>>(local_id: T, local_peer_id: PeerId) -> Self {
-        Self {
-            local_peer_id,
-            local_peer_hash: local_id.into(),
-            torrents: FnvHashMap::default(),
-            timeout: Duration::from_secs(120),
-        }
     }
 
     /// returns all peers that are currently related to the torrents hash

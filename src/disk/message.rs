@@ -41,7 +41,7 @@ pub enum DiskMessageOut {
     /// as `FoundGoodPiece` messages BEFORE this message is sent.
     TorrentAdded(TorrentId),
     /// Message indicating that the torrent has been removed.
-    TorrentRemoved(TorrentId),
+    TorrentRemoved(TorrentId, MetaInfo),
     /// Message indicating that the torrent has been synced.
     TorrentSynced(TorrentId),
     /// Message indicating that a good piece has been identified for

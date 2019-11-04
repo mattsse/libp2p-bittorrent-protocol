@@ -1,8 +1,14 @@
+use crate::disk::block::{Block, BlockMut};
+use crate::disk::error::TorrentError;
+use crate::disk::message::{DiskMessageIn, DiskMessageOut};
 use crate::torrent::MetaInfo;
 use crate::util::ShaHash;
+use futures::{Async, Future};
 use sha1::Sha1;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use tokio_fs::file::{OpenFuture, SeekFuture};
+use tokio_fs::OpenOptions;
 
 #[derive(Clone, Eq, PartialEq, Hash)]
 pub struct FileEntry {
@@ -33,11 +39,4 @@ pub struct FileStorage {
     pub piece_length: u32,
     /// the number of pieces in the torrent
     pub num_pieces: u32,
-}
-
-#[derive(Debug)]
-pub struct FileHandle {
-    /// the torrent's info
-    meta: MetaInfo,
-    files: HashMap<u32, Option<tokio_fs::File>>,
 }

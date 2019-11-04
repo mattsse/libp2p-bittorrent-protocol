@@ -24,7 +24,7 @@ pub enum TorrentError {
     BadBlock {
         meta: BlockMetadata,
     },
-    #[snafu(display("Can't process piece: {}", index))]
+    #[snafu(display("Bad piece at: {}", index))]
     BadPiece {
         index: u64,
     },

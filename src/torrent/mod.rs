@@ -1,6 +1,7 @@
 pub mod builder;
 
 use crate::bitfield::BitField;
+use crate::disk::error::TorrentError;
 use crate::error::Result;
 use crate::util::{ShaHash, SHA_HASH_LEN};
 use bendy::decoding::{Decoder, DictDecoder, ListDecoder};
@@ -11,6 +12,7 @@ use bendy::{
 };
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use sha1::{Sha1, DIGEST_LENGTH};
+use std::borrow::Cow;
 use std::convert::TryInto;
 use std::fmt;
 use std::fs::File;
@@ -284,6 +286,45 @@ impl TorrentInfo {
     #[inline]
     pub fn last_piece_size(&self) -> usize {
         (self.content.length() % self.piece_length) as usize
+    }
+
+    pub fn files_for_piece_index(
+        &self,
+        piece_index: u64,
+    ) -> Result<(&ShaHash, Vec<Cow<SubFileInfo>>), TorrentError> {
+        if (piece_index as usize) < self.pieces.len() {
+            match &self.content {
+                InfoContent::Single { length } => {
+                    return Ok((
+                        &self.pieces[piece_index as usize],
+                        vec![Cow::Owned(SubFileInfo {
+                            length: *length,
+                            paths: vec![self.name.clone()],
+                        })],
+                    ));
+                }
+                InfoContent::Multi { files } => {
+                    let piece_start = self.piece_length * piece_index;
+                    let (piece_start, piece_end) = (piece_start, piece_start + self.piece_length);
+
+                    let mut piece_files = Vec::new();
+
+                    let mut length = 0;
+                    for file in files {
+                        length += file.length;
+                        if length >= piece_end {
+                            piece_files.push(Cow::Borrowed(file));
+                            return Ok((&self.pieces[piece_index as usize], piece_files));
+                        }
+                        if length >= piece_start {
+                            piece_files.push(Cow::Borrowed(file));
+                        }
+                    }
+                }
+            };
+        }
+
+        Err(TorrentError::BadPiece { index: piece_index })
     }
 }
 
