@@ -94,14 +94,13 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
         &mut self,
         id: TorrentId,
         meta: BlockMetadata,
-    ) -> Result<Async<DiskMessageOut>, io::Error> {
+    ) -> Result<Async<DiskMessageOut>, TFileSystem::Error> {
         if let Some(torrent) = self.torrents.get(&id) {
             match torrent.files_for_block(meta.clone()) {
                 Ok(files) => {
                     assert!(!files.is_empty());
 
                     let mut queued_files = Vec::with_capacity(files.len());
-
                     let mut all_ready = true;
 
                     for (file, metadata) in files {
@@ -138,7 +137,7 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                             let (id, fs, meta) = queued_files.remove(0);
                             self.file_cache
                                 .insert(id, FileState::Busy(meta.piece_index));
-                            BlockRead::Single(BlockFileRead::new(id, fs, meta))
+                            BlockIn::Read(BlockRead::Single(BlockFileRead::new(id, fs, meta)))
                         } else {
                             let mut overlap = Vec::with_capacity(queued_files.len());
 
@@ -148,13 +147,13 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                                     .insert(id, FileState::Busy(meta.piece_index));
                             }
 
-                            BlockRead::Overlap(overlap)
+                            BlockIn::Read(BlockRead::Overlap(overlap))
                         };
 
-                        if block.poll(&self.file_system)?.is_ready() {
+                        if block.poll(&mut self.file_system)?.is_ready() {
                             Ok(Async::NotReady)
                         } else {
-                            self.active_blocks.push(BlockIn::Read(block));
+                            self.active_blocks.push(block);
 
                             Ok(Async::NotReady)
                         }
@@ -168,6 +167,7 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                         Ok(Async::NotReady)
                     }
                 }
+                Err(e) => Ok(Async::Ready(DiskMessageOut::TorrentError(id.clone(), e))),
             }
         } else {
             Ok(Async::Ready(DiskMessageOut::TorrentError(

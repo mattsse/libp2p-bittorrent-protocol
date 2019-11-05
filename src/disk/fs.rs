@@ -16,7 +16,7 @@ pub trait FileSystem {
     /// Intermediate directories will be created if necessary.
     fn poll_open_file<P>(&mut self, path: P) -> Result<Async<Self::File>, Self::Error>
     where
-        P: AsRef<Path> + Send + 'static;
+        P: AsRef<Path>;
 
     /// Sync the file.
     fn sync_file<P>(&mut self, path: P) -> Result<Async<()>, Self::Error>

@@ -40,7 +40,7 @@ impl FileSystem for NativeFileSystem {
 
     fn poll_open_file<P>(&mut self, path: P) -> Result<Async<Self::File>, Self::Error>
     where
-        P: AsRef<Path> + Send + 'static,
+        P: AsRef<Path>,
     {
         let path = self.target_dir.join(path);
         self.file_ops.open(path).poll()
