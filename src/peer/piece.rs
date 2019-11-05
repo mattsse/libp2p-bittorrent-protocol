@@ -209,7 +209,7 @@ impl TorrentPeerIter {
 
 /// Unique identifier for an active Torrent operation.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct TorrentId(usize);
+pub struct TorrentId(pub usize);
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct TorrentPeer {

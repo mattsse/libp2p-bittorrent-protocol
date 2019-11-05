@@ -1,44 +1,34 @@
-use crate::disk::block::{Block, BlockMetadata, BlockMut};
+use crate::behavior::BittorrentEvent::BlockResult;
+use crate::disk::block::{
+    Block, BlockFileRead, BlockFileWrite, BlockIn, BlockMetadata, BlockMut, BlockRead, BlockWrite,
+};
 use crate::disk::error::TorrentError;
+use crate::disk::file::{FileEntry, TorrentFile, TorrentFileId};
 use crate::disk::fs::FileSystem;
 use crate::disk::message::{DiskMessageIn, DiskMessageOut};
 use crate::disk::native::NativeFileSystem;
 use crate::peer::piece::TorrentId;
 use crate::torrent::MetaInfo;
 use crate::util::ShaHash;
-use fnv::FnvHashMap;
+use bit_vec::BitBlock;
+use fnv::{FnvHashMap, FnvHashSet};
 use futures::future::Either;
 use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
 use lru_cache::LruCache;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use tokio_fs::file::{OpenFuture, SeekFuture};
 use tokio_fs::OpenOptions;
 
-pub struct TorrentEntry {
-    meta_info: MetaInfo,
-    file_map: HashMap<u64, (ShaHash, Vec<PathBuf>)>,
-}
-
 /// `DiskManager` object which handles the storage of `Blocks` to the `FileSystem`.
 pub struct DiskManager<TFileSystem: FileSystem> {
     active_blocks: Vec<BlockIn<TFileSystem::File>>,
-    file_cache: LruCache<PathBuf, FileState<TFileSystem::File>>,
-    torrents: FnvHashMap<TorrentId, MetaInfo>,
+    file_cache: LruCache<TorrentFileId, FileState<TFileSystem::File>>,
+    torrents: FnvHashSet<TorrentFile>,
     file_system: TFileSystem,
     queued_events: VecDeque<DiskMessageIn>,
-    next_file_id: usize,
-}
-
-impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
-    fn remove_torrent(&mut self, id: TorrentId) -> Option<MetaInfo> {
-        unimplemented!()
-        // drain files
-    }
-
-    fn add_torrent(&mut self, id: TorrentId, meta: MetaInfo) {}
 }
 
 impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
@@ -46,10 +36,9 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
         DiskManager {
             active_blocks: Default::default(),
             file_cache: LruCache::new(capacity),
-            torrents: FnvHashMap::default(),
+            torrents: FnvHashSet::default(),
             file_system,
             queued_events: VecDeque::new(),
-            next_file_id: 0,
         }
     }
 
@@ -58,23 +47,136 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
     }
 
     /// queue in a new block to write to disk
-    // TODO this should return a poll
     pub fn write_block(&mut self, torrent_id: TorrentId, block: Block) {
         self.queued_events
-            .push_back(DiskMessageIn::ProcessBlock((torrent_id, block)));
+            .push_back(DiskMessageIn::WriteBlock((torrent_id, block)));
     }
 
     /// fill a new block from a seed
-    // TODO return a poll
-    pub fn load_block(&mut self, torrent_id: TorrentId, block: BlockMut) {
+    pub fn load_block(&mut self, torrent_id: TorrentId, metadata: BlockMetadata) {
         self.queued_events
-            .push_back(DiskMessageIn::LoadBlock((torrent_id, block)));
+            .push_back(DiskMessageIn::ReadBlock(torrent_id, metadata));
+    }
+
+    /// removes the torrent, means future request targeting to read/load a block from the torrent won't succeed
+    fn remove_torrent(&mut self, id: TorrentId) -> DiskMessageOut {
+        if let Some(file) = self.torrents.take(&id) {
+            DiskMessageOut::TorrentRemoved(id, file.meta_info)
+        } else {
+            DiskMessageOut::TorrentError(id.clone(), TorrentError::TorrentNotFound { id })
+        }
+    }
+
+    /// stores a new torrent
+    fn add_torrent(&mut self, id: TorrentId, meta: MetaInfo) -> DiskMessageOut {
+        if self.torrents.contains(&id) {
+            DiskMessageOut::TorrentError(id, TorrentError::ExistingTorrent { meta })
+        } else {
+            self.torrents.insert(TorrentFile::new(id.clone(), meta));
+            DiskMessageOut::TorrentAdded(id)
+        }
+    }
+
+    fn sync_torrent(&mut self, id: TorrentId) {
+        if let Some(meta) = self.torrents.get(&id) {}
+        unimplemented!()
+    }
+
+    fn get_torrent_files(&self, id: &TorrentId) -> Option<&HashSet<FileEntry>> {
+        if let Some(file) = self.torrents.get(id) {
+            Some(&file.files)
+        } else {
+            None
+        }
+    }
+
+    fn add_block_read(
+        &mut self,
+        id: TorrentId,
+        meta: BlockMetadata,
+    ) -> Result<Async<DiskMessageOut>, io::Error> {
+        if let Some(torrent) = self.torrents.get(&id) {
+            match torrent.files_for_block(meta.clone()) {
+                Ok(files) => {
+                    assert!(!files.is_empty());
+
+                    let mut queued_files = Vec::with_capacity(files.len());
+
+                    let mut all_ready = true;
+
+                    for (file, metadata) in files {
+                        if let Some(state) = self.file_cache.remove(&file.id) {
+                            match state {
+                                FileState::Ready(fs_file) => {
+                                    queued_files.push((file.id, fs_file, metadata));
+                                }
+                                FileState::Queued(fs_file, queued_meta) => {
+                                    if metadata != queued_meta {
+                                        all_ready = false;
+                                    }
+                                    queued_files.push((file.id, fs_file, metadata));
+                                }
+                                FileState::Busy(piece) => {
+                                    all_ready = false;
+                                    self.file_cache.insert(file.id, FileState::Busy(piece));
+                                }
+                            }
+                        } else {
+                            // file not available yet
+                            if let Async::Ready(fs_file) =
+                                self.file_system.poll_open_file(&file.path)?
+                            {
+                                queued_files.push((file.id, fs_file, metadata));
+                            } else {
+                                all_ready = false;
+                                break;
+                            }
+                        }
+                    }
+                    if all_ready {
+                        let mut block = if queued_files.len() == 1 {
+                            let (id, fs, meta) = queued_files.remove(0);
+                            self.file_cache
+                                .insert(id, FileState::Busy(meta.piece_index));
+                            BlockRead::Single(BlockFileRead::new(id, fs, meta))
+                        } else {
+                            let mut overlap = Vec::with_capacity(queued_files.len());
+
+                            for (id, fs, meta) in queued_files {
+                                overlap.push(BlockFileRead::new(id, fs, meta));
+                                self.file_cache
+                                    .insert(id, FileState::Busy(meta.piece_index));
+                            }
+
+                            BlockRead::Overlap(overlap)
+                        };
+
+                        if block.poll(&self.file_system)?.is_ready() {
+                            Ok(Async::NotReady)
+                        } else {
+                            self.active_blocks.push(BlockIn::Read(block));
+
+                            Ok(Async::NotReady)
+                        }
+                    } else {
+                        // add removed states back, but queued
+                        for (id, fs, meta) in queued_files {
+                            self.file_cache.insert(id, FileState::Queued(fs, meta));
+                        }
+                        self.queued_events
+                            .push_back(DiskMessageIn::ReadBlock(id, meta));
+                        Ok(Async::NotReady)
+                    }
+                }
+            }
+        } else {
+            Ok(Async::Ready(DiskMessageOut::TorrentError(
+                id.clone(),
+                TorrentError::TorrentNotFound { id },
+            )))
+        }
     }
 }
-
-/// Unique identifier for an active Torrent operation.
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct FileId(usize);
 
 impl<TFileSystem: FileSystem> Future for DiskManager<TFileSystem> {
     type Item = DiskMessageOut;
@@ -92,28 +194,48 @@ impl<TFileSystem: FileSystem> Future for DiskManager<TFileSystem> {
             } else {
                 self.active_blocks.push(block);
             }
+        }
 
-            loop {
-
-                // TODO loop through all messages
-                // try to poll pending diskmessages directly
-                // skip busy files
-
-                //                if let Some(mut handles) = self.files.get_mut(&block.piece_index()) {
-                //
-                //                    for h in (0..handles.len()).rev() {
-                //                        let mut block = handles.swap_remove(h) {
-                //
-                //                        }
-                //                    }
-                //                } else {
-                //                    let (hash, files) =
-                //                        self.meta.info.files_for_piece_index(block.piece_index())?;
-
-                //                }
-
-                // TODO validate the block if its complete
+        loop {
+            if let Some(msg) = self.queued_events.pop_front() {
+                match msg {
+                    DiskMessageIn::AddTorrent(id, meta) => {
+                        return Ok(Async::Ready(self.add_torrent(id, meta)));
+                    }
+                    DiskMessageIn::RemoveTorrent(id) => {
+                        return Ok(Async::Ready(self.remove_torrent(id)));
+                    }
+                    DiskMessageIn::SyncTorrent(id) => {}
+                    DiskMessageIn::ReadBlock(id, metadata) => {
+                        //                        let block = BlockIn::Read(
+                        //                            BlockRead {
+                        //
+                        //                            }
+                        //                        );
+                    }
+                    _ => panic!(),
+                }
+            } else {
+                break;
             }
+            // TODO loop through all messages
+            // try to poll pending diskmessages directly
+            // skip busy files
+
+            //                if let Some(mut handles) = self.files.get_mut(&block.piece_index()) {
+            //
+            //                    for h in (0..handles.len()).rev() {
+            //                        let mut block = handles.swap_remove(h) {
+            //
+            //                        }
+            //                    }
+            //                } else {
+            //                    let (hash, files) =
+            //                        self.meta.info.files_for_piece_index(block.piece_index())?;
+
+            //                }
+
+            // TODO validate the block if its complete
         }
 
         if self.queued_events.is_empty() {
@@ -124,208 +246,8 @@ impl<TFileSystem: FileSystem> Future for DiskManager<TFileSystem> {
     }
 }
 
-#[derive(Debug)]
-pub struct BlockFile<TFile> {
-    path: PathBuf,
-    file: TFile,
-}
-
-#[derive(Debug)]
-pub struct BlockFileWrite<TFile> {
-    file: BlockFile<TFile>,
-    block: Block,
-    state: BlockState,
-}
-
-impl<TFile> BlockFileWrite<TFile> {
-    fn poll<TFileSystem: FileSystem<File = TFile>>(
-        &mut self,
-        fs: &mut TFileSystem,
-    ) -> Result<Async<()>, TFileSystem::Error> {
-        match self.state {
-            BlockState::Ready => Ok(Async::Ready(())),
-            BlockState::Seek => {
-                if let Async::Ready(_) = fs.poll_seek(
-                    &mut self.file.file,
-                    SeekFrom::Start(self.block.metadata().block_offset),
-                )? {
-                    if let Async::Ready(_) =
-                        fs.poll_write_block(&mut self.file.file, &mut self.block)?
-                    {
-                        self.state = BlockState::Ready;
-                        Ok(Async::Ready(()))
-                    } else {
-                        self.state = BlockState::Process;
-                        Ok(Async::NotReady)
-                    }
-                } else {
-                    Ok(Async::NotReady)
-                }
-            }
-            BlockState::Process => {
-                if let Async::Ready(_) =
-                    fs.poll_write_block(&mut self.file.file, &mut self.block)?
-                {
-                    self.state = BlockState::Ready;
-                    Ok(Async::Ready(()))
-                } else {
-                    Ok(Async::NotReady)
-                }
-            }
-        }
-    }
-}
-
-#[derive(Debug, Copy, Clone)]
-pub enum BlockState {
-    Seek,
-    Process,
-    Ready,
-}
-
-#[derive(Debug)]
-pub struct BlockFileRead<TFile> {
-    file: BlockFile<TFile>,
-    block: BlockMut,
-    state: BlockState,
-}
-
-impl<TFile> BlockFileRead<TFile> {
-    fn poll<TFileSystem: FileSystem<File = TFile>>(
-        &mut self,
-        fs: &mut TFileSystem,
-    ) -> Result<Async<()>, TFileSystem::Error> {
-        match self.state {
-            BlockState::Ready => Ok(Async::Ready(())),
-            BlockState::Seek => {
-                if let Async::Ready(_) = fs.poll_seek(
-                    &mut self.file.file,
-                    SeekFrom::Start(self.block.metadata().block_offset),
-                )? {
-                    if let Async::Ready(_) =
-                        fs.poll_read_block(&mut self.file.file, &mut self.block)?
-                    {
-                        self.state = BlockState::Ready;
-                        Ok(Async::Ready(()))
-                    } else {
-                        self.state = BlockState::Process;
-                        Ok(Async::NotReady)
-                    }
-                } else {
-                    Ok(Async::NotReady)
-                }
-            }
-            BlockState::Process => {
-                if let Async::Ready(_) = fs.poll_read_block(&mut self.file.file, &mut self.block)? {
-                    self.state = BlockState::Ready;
-                    Ok(Async::Ready(()))
-                } else {
-                    Ok(Async::NotReady)
-                }
-            }
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum BlockIn<TFile> {
-    Read(ReadBlock<TFile>),
-    Write(WriteBlock<TFile>),
-}
-
-impl<TFile> BlockIn<TFile> {
-    fn piece_index(&self) -> u64 {
-        match self {
-            BlockIn::Read(block) => block.piece_index,
-            BlockIn::Write(block) => block.piece_index,
-        }
-    }
-
-    fn poll<TFileSystem: FileSystem<File = TFile>>(
-        &mut self,
-        fs: &mut TFileSystem,
-    ) -> Result<Async<()>, TFileSystem::Error> {
-        match self {
-            BlockIn::Read(read) => match &mut read.block {
-                BlockRead::Single(block) => block.poll(fs),
-                BlockRead::Overlap(blocks) => {
-                    let mut ready = true;
-                    for block in blocks {
-                        if block.poll(fs)?.is_not_ready() {
-                            ready = false;
-                        }
-                    }
-                    if ready {
-                        Ok(Async::Ready(()))
-                    } else {
-                        Ok(Async::NotReady)
-                    }
-                }
-            },
-
-            BlockIn::Write(write) => match &mut write.block {
-                BlockWrite::Single(block) => block.poll(fs),
-                BlockWrite::Overlap(blocks) => {
-                    let mut ready = true;
-                    for block in blocks {
-                        if block.poll(fs)?.is_not_ready() {
-                            ready = false;
-                        }
-                    }
-                    if ready {
-                        Ok(Async::Ready(()))
-                    } else {
-                        Ok(Async::NotReady)
-                    }
-                }
-            },
-        }
-    }
-
-    fn into_block_out(self) -> BlockOut<TFile> {
-        match self {
-            BlockIn::Read(read) => BlockOut::Read(read),
-            BlockIn::Write(write) => BlockOut::Written(write),
-        }
-    }
-}
-
 pub enum FileState<TFile> {
-    Ready(TFile, FileId),
+    Queued(TFile, BlockMetadata),
+    Ready(TFile),
     Busy(u64),
-}
-
-#[derive(Debug)]
-pub enum BlockOut<TFile> {
-    Read(ReadBlock<TFile>),
-    Written(WriteBlock<TFile>),
-    /// Error occurring from a `LoadBlock` message.
-    LoadBlockError(TorrentError),
-    /// Error occurring from a `ProcessBlock` message.
-    ProcessBlockError(TorrentError),
-    FoundBadPiece(u64),
-}
-
-#[derive(Debug)]
-pub struct ReadBlock<TFile> {
-    piece_index: u64,
-    block: BlockRead<TFile>,
-}
-
-#[derive(Debug)]
-pub enum BlockRead<TFile> {
-    Single(BlockFileRead<TFile>),
-    Overlap(Vec<BlockFileRead<TFile>>),
-}
-
-#[derive(Debug)]
-pub struct WriteBlock<TFile> {
-    piece_index: u64,
-    block: BlockWrite<TFile>,
-}
-
-#[derive(Debug)]
-pub enum BlockWrite<TFile> {
-    Single(BlockFileWrite<TFile>),
-    Overlap(Vec<BlockFileWrite<TFile>>),
 }

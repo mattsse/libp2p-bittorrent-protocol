@@ -1,4 +1,4 @@
-use crate::disk::block::{Block, BlockMut};
+use crate::disk::block::{Block, BlockMetadata, BlockMut};
 use crate::disk::error::TorrentError;
 use crate::peer::piece::TorrentId;
 use crate::torrent::MetaInfo;
@@ -27,9 +27,9 @@ pub enum DiskMessageIn {
     /// sufficient.
     SyncTorrent(TorrentId),
     /// Message to load the given block in to memory.
-    LoadBlock((TorrentId, BlockMut)),
+    ReadBlock(TorrentId, BlockMetadata),
     /// Message to process the given block and persist it.
-    ProcessBlock((TorrentId, Block)),
+    WriteBlock((TorrentId, Block)),
 }
 
 /// Messages that can be received from the `DiskManager`.
@@ -51,9 +51,9 @@ pub enum DiskMessageOut {
     /// the given torrent (hash), as well as the piece index.
     FoundBadPiece(TorrentId, u64),
     /// Message indicating that the given block has been loaded.
-    BlockLoaded(BlockMut),
+    BlockRead(BlockMut),
     /// Message indicating that the given block has been processed.
-    BlockProcessed(Block),
+    BlockWritten(Block),
     /// Error occurring from a `AddTorrent` or `RemoveTorrent` message.
     TorrentError(TorrentId, TorrentError),
     /// Error occurring from a `LoadBlock` message.

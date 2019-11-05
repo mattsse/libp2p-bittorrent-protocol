@@ -288,6 +288,8 @@ impl TorrentInfo {
         (self.content.length() % self.piece_length) as usize
     }
 
+    /// returns all files that are related to a piece
+    // TODO create
     pub fn files_for_piece_index(
         &self,
         piece_index: u64,
@@ -323,8 +325,16 @@ impl TorrentInfo {
                 }
             };
         }
-
         Err(TorrentError::BadPiece { index: piece_index })
+    }
+
+    /// all files contained in this torrent
+    pub fn all_files(&self) -> Vec<PathBuf> {
+        if let InfoContent::Multi { files } = &self.content {
+            files.iter().map(SubFileInfo::relative_file_path).collect()
+        } else {
+            vec![PathBuf::from(&self.name)]
+        }
     }
 }
 
@@ -486,9 +496,9 @@ impl SubFileInfo {
         self.paths.last().map(String::as_str)
     }
 
-    /// returns the complete Path of the file including all parent directories
+    /// returns the complete Path of the file including its parent directories, but without the root directory of the torrent
     #[inline]
-    pub fn file_path(&self) -> PathBuf {
+    pub fn relative_file_path(&self) -> PathBuf {
         self.paths
             .iter()
             .fold(PathBuf::new(), |mut buf, path| buf.join(path))

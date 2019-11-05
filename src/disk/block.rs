@@ -1,5 +1,10 @@
+use crate::disk::error::TorrentError;
+use crate::disk::file::TorrentFileId;
+use crate::disk::fs::FileSystem;
 use crate::util::{ShaHash, SHA_HASH_LEN};
 use bytes::{Bytes, BytesMut};
+use futures::Async;
+use std::io::SeekFrom;
 use std::ops::{Deref, DerefMut};
 
 /// `BlockMetadata` which tracks metadata associated with a `Block` of memory.
@@ -17,14 +22,6 @@ impl BlockMetadata {
             block_offset,
             block_length,
         }
-    }
-
-    pub fn with_default_hash(
-        piece_index: u64,
-        block_offset: u64,
-        block_length: usize,
-    ) -> BlockMetadata {
-        BlockMetadata::new(piece_index, block_offset, block_length)
     }
 
     pub fn piece_index(&self) -> u64 {
@@ -102,6 +99,7 @@ impl BlockMut {
         }
     }
 
+    /// create a new `BlockMut` with the capacity requested in the metadata
     pub fn empty_for_metadata(metadata: BlockMetadata) -> Self {
         Self {
             block_data: BytesMut::with_capacity(metadata.block_length),
@@ -135,4 +133,239 @@ impl DerefMut for BlockMut {
     fn deref_mut(&mut self) -> &mut [u8] {
         &mut self.block_data
     }
+}
+
+#[derive(Debug)]
+pub struct BlockFile<TFile> {
+    file_id: TorrentFileId,
+    file: TFile,
+}
+
+impl<TFile> BlockFile<TFile> {
+    pub fn new(file_id: TorrentFileId, file: TFile) -> Self {
+        Self { file_id, file }
+    }
+}
+
+#[derive(Debug)]
+pub struct BlockFileWrite<TFile> {
+    file: BlockFile<TFile>,
+    block: Block,
+    state: BlockState,
+}
+
+impl<TFile> BlockFileWrite<TFile> {
+    pub fn new(file_id: TorrentFileId, file: TFile, block: Block) -> Self {
+        Self {
+            file: BlockFile::new(file_id, file),
+            block,
+            state: Default::default(),
+        }
+    }
+
+    pub fn metadata(&self) -> &BlockMetadata {
+        &self.block.metadata
+    }
+
+    pub fn poll<TFileSystem: FileSystem<File = TFile>>(
+        &mut self,
+        fs: &mut TFileSystem,
+    ) -> Result<Async<()>, TFileSystem::Error> {
+        match self.state {
+            BlockState::Ready => Ok(Async::Ready(())),
+            BlockState::Seek => {
+                if let Async::Ready(_) = fs.poll_seek(
+                    &mut self.file.file,
+                    SeekFrom::Start(self.block.metadata().block_offset),
+                )? {
+                    if let Async::Ready(_) =
+                        fs.poll_write_block(&mut self.file.file, &mut self.block)?
+                    {
+                        self.state = BlockState::Ready;
+                        Ok(Async::Ready(()))
+                    } else {
+                        self.state = BlockState::Process;
+                        Ok(Async::NotReady)
+                    }
+                } else {
+                    Ok(Async::NotReady)
+                }
+            }
+            BlockState::Process => {
+                if let Async::Ready(_) =
+                    fs.poll_write_block(&mut self.file.file, &mut self.block)?
+                {
+                    self.state = BlockState::Ready;
+                    Ok(Async::Ready(()))
+                } else {
+                    Ok(Async::NotReady)
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum BlockState {
+    Seek,
+    Process,
+    Ready,
+}
+
+impl Default for BlockState {
+    fn default() -> Self {
+        BlockState::Seek
+    }
+}
+
+#[derive(Debug)]
+pub struct BlockFileRead<TFile> {
+    file: BlockFile<TFile>,
+    block: BlockMut,
+    state: BlockState,
+}
+
+impl<TFile> BlockFileRead<TFile> {
+    pub fn new(file_id: TorrentFileId, file: TFile, metadata: BlockMetadata) -> Self {
+        Self {
+            file: BlockFile::new(file_id, file),
+            block: BlockMut::empty_for_metadata(metadata),
+            state: Default::default(),
+        }
+    }
+
+    pub fn metadata(&self) -> &BlockMetadata {
+        &self.block.metadata
+    }
+
+    pub fn poll<TFileSystem: FileSystem<File = TFile>>(
+        &mut self,
+        fs: &mut TFileSystem,
+    ) -> Result<Async<()>, TFileSystem::Error> {
+        match self.state {
+            BlockState::Ready => Ok(Async::Ready(())),
+            BlockState::Seek => {
+                if let Async::Ready(_) = fs.poll_seek(
+                    &mut self.file.file,
+                    SeekFrom::Start(self.block.metadata().block_offset),
+                )? {
+                    if let Async::Ready(_) =
+                        fs.poll_read_block(&mut self.file.file, &mut self.block)?
+                    {
+                        self.state = BlockState::Ready;
+                        Ok(Async::Ready(()))
+                    } else {
+                        self.state = BlockState::Process;
+                        Ok(Async::NotReady)
+                    }
+                } else {
+                    Ok(Async::NotReady)
+                }
+            }
+            BlockState::Process => {
+                if let Async::Ready(_) = fs.poll_read_block(&mut self.file.file, &mut self.block)? {
+                    self.state = BlockState::Ready;
+                    Ok(Async::Ready(()))
+                } else {
+                    Ok(Async::NotReady)
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum BlockIn<TFile> {
+    Read(BlockRead<TFile>),
+    Write(BlockWrite<TFile>),
+}
+
+impl<TFile> BlockIn<TFile> {
+    fn piece_index(&self) -> u64 {
+        unimplemented!()
+    }
+
+    pub fn poll<TFileSystem: FileSystem<File = TFile>>(
+        &mut self,
+        fs: &mut TFileSystem,
+    ) -> Result<Async<()>, TFileSystem::Error> {
+        match self {
+            BlockIn::Read(read) => match read {
+                BlockRead::Single(block) => block.poll(fs),
+                BlockRead::Overlap(blocks) => {
+                    let mut ready = true;
+                    for block in blocks {
+                        if block.poll(fs)?.is_not_ready() {
+                            ready = false;
+                        }
+                    }
+                    if ready {
+                        Ok(Async::Ready(()))
+                    } else {
+                        Ok(Async::NotReady)
+                    }
+                }
+            },
+
+            BlockIn::Write(write) => match write {
+                BlockWrite::Single(block) => block.poll(fs),
+                BlockWrite::Overlap(blocks) => {
+                    let mut ready = true;
+                    for block in blocks {
+                        if block.poll(fs)?.is_not_ready() {
+                            ready = false;
+                        }
+                    }
+                    if ready {
+                        Ok(Async::Ready(()))
+                    } else {
+                        Ok(Async::NotReady)
+                    }
+                }
+            },
+        }
+    }
+
+    fn into_block_out(self) -> BlockOut<TFile> {
+        match self {
+            BlockIn::Read(read) => BlockOut::Read(read),
+            BlockIn::Write(write) => BlockOut::Written(write),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum BlockRead<TFile> {
+    Single(BlockFileRead<TFile>),
+    Overlap(Vec<BlockFileRead<TFile>>),
+}
+
+impl<TFile> Into<BlockMut> for BlockRead<TFile> {
+    fn into(self) -> BlockMut {
+        match self {
+            BlockRead::Single(block) => {
+                block.block;
+            }
+            BlockRead::Overlap(blocks) => {}
+        };
+
+        unimplemented!()
+    }
+}
+
+#[derive(Debug)]
+pub enum BlockWrite<TFile> {
+    Single(BlockFileWrite<TFile>),
+    Overlap(Vec<BlockFileWrite<TFile>>),
+}
+
+#[derive(Debug)]
+pub enum BlockOut<TFile> {
+    Read(BlockRead<TFile>),
+    Written(BlockWrite<TFile>),
+    /// Error occurring from a `LoadBlock` message.
+    LoadBlockError(TorrentError),
+    /// Error occurring from a `ProcessBlock` message.
+    ProcessBlockError(TorrentError),
+    FoundBadPiece(u64),
 }
