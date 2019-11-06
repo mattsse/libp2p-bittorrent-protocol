@@ -151,7 +151,8 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                         };
 
                         if block.poll(&mut self.file_system)?.is_ready() {
-                            Ok(Async::NotReady)
+                            // TODO
+                            panic!()
                         } else {
                             self.active_blocks.push(block);
 
@@ -167,11 +168,11 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                         Ok(Async::NotReady)
                     }
                 }
-                Err(e) => Ok(Async::Ready(DiskMessageOut::TorrentError(id.clone(), e))),
+                Err(e) => Ok(Async::Ready(DiskMessageOut::TorrentError(id, e))),
             }
         } else {
             Ok(Async::Ready(DiskMessageOut::TorrentError(
-                id.clone(),
+                id,
                 TorrentError::TorrentNotFound { id },
             )))
         }
