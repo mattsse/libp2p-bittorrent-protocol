@@ -41,7 +41,7 @@ pub struct BttPeer {
     /// the peer's bittorrent id
     pub peer_id: ShaHash,
     /// what pieces this peers owns or lacks
-    pub piece_field: BitField,
+    pub piece_field: Option<BitField>,
     /// history of send/receive statistics
     pub stats: PeerStats,
     /// How the remote treats requests made by the client.
@@ -55,7 +55,7 @@ pub struct BttPeer {
 impl BttPeer {
     pub fn new<T: Into<ShaHash>>(peer_id: T, piece_field: BitField) -> Self {
         Self {
-            piece_field,
+            piece_field: Some(piece_field),
             peer_id: peer_id.into(),
             stats: Default::default(),
             choke_ty: Default::default(),

@@ -1,6 +1,8 @@
 //! Implementation of the `Bittorrent` network behaviour.
 
+use crate::disk::message::DiskMessageOut;
 use crate::peer::BttPeer;
+use crate::proto::message::Handshake;
 use crate::{
     disk::error::TorrentError,
     disk::fs::FileSystem,
@@ -70,13 +72,17 @@ where
         // TODO candidate identification should be a DHT lookup
         // for now consider all connected peers potential candidates
         for candidate_peer_id in self.torrents.iter_candidate_peer_ids(&info_hash) {
-            self.queued_events
-                .push_back(NetworkBehaviourAction::SendEvent {
-                    peer_id: candidate_peer_id.clone(),
-                    event: BittorrentHandlerIn::HandshakeOut {
-                        info_hash: info_hash.clone(),
-                    },
-                });
+            //            self.queued_events
+            //                .push_back(NetworkBehaviourAction::SendEvent {
+            //                    peer_id: candidate_peer_id.clone(),
+            //                    event: BittorrentHandlerIn::HandshakeReq {
+            //                        handshake: Handshake::new(
+            //                            torrent.info_hash.clone(),
+            //                            self.torrents.local_peer_hash.clone(),
+            //                        ),
+            //                        user_data: torrent.id(),
+            //                    },
+            //                });
         }
     }
 
@@ -225,8 +231,12 @@ where
             self.queued_events
                 .push_back(NetworkBehaviourAction::SendEvent {
                     peer_id: peer_id.clone(),
-                    event: BittorrentHandlerIn::HandshakeOut {
-                        info_hash: torrent.info_hash.clone(),
+                    event: BittorrentHandlerIn::HandshakeReq {
+                        handshake: Handshake::new(
+                            torrent.info_hash.clone(),
+                            self.torrents.local_peer_hash.clone(),
+                        ),
+                        user_data: torrent.id(),
                     },
                 });
         }
@@ -235,14 +245,17 @@ where
     }
 
     fn inject_disconnected(&mut self, peer_id: &PeerId, endpoint: ConnectedPoint) {
-        unimplemented!()
+        self.connected_peers.remove(peer_id);
     }
 
+    /// send from the handler
     fn inject_node_event(&mut self, peer_id: PeerId, event: BittorrentHandlerEvent<TorrentId>) {
         // torrents are identified by peer + active torrent id as user data in the handler event
+
         unimplemented!()
     }
 
+    /// send to user or handler
     fn poll(
         &mut self,
         parameters: &mut impl PollParameters,
@@ -258,13 +271,14 @@ where
             // drain pending disk io
             match self.disk_manager.poll() {
                 Ok(Async::Ready(event)) => {
-                    // TODO handle disk event to update torrent stats, etc.
                     return Async::Ready(NetworkBehaviourAction::GenerateEvent(
-                        BittorrentEvent::DiskResult,
+                        BittorrentEvent::DiskResult(Ok(event)),
                     ));
                 }
                 Err(err) => {
-                    //
+                    return Async::Ready(NetworkBehaviourAction::GenerateEvent(
+                        BittorrentEvent::DiskResult(Err(())),
+                    ));
                 }
                 _ => {
                     return Async::NotReady;
@@ -289,20 +303,22 @@ where
                             return Async::Ready(NetworkBehaviourAction::GenerateEvent(event));
                         }
                     }
-                    TorrentPoolState::BlockReady((torrent_id, buffer)) => {
-                        // TODO handle error
-                        self.block_ready(torrent_id, buffer);
+                    TorrentPoolState::BlockReady(torrent_id, buffer) => {
+                        if let Some(event) = self.block_ready(torrent_id, buffer) {
+                            return Async::Ready(NetworkBehaviourAction::GenerateEvent(event));
+                        }
                     }
                     TorrentPoolState::KeepAlive(peer_id) => {
+                        // a new keepalive msg needs to be send
                         return Async::Ready(NetworkBehaviourAction::SendEvent {
                             peer_id,
                             event: BittorrentHandlerIn::KeepAlive,
                         });
                     }
-                    TorrentPoolState::Waiting(Some((torrent, peer_id))) => {
-                        panic!();
+                    TorrentPoolState::Waiting(torrent) => {
+                        continue;
                     }
-                    TorrentPoolState::Waiting(None) | TorrentPoolState::Idle => break,
+                    TorrentPoolState::Idle => continue,
                 }
             }
 
@@ -323,11 +339,19 @@ where
 pub enum BittorrentEvent {
     HandshakeResult(HandshakeResult),
     BlockResult(BlockResult),
-    DiskResult,
+    DiskResult(DiskResult),
+
+    TorrentFinished { path: PathBuf },
+    TorrentSubfileFinished { path: PathBuf },
+    AddTorrentSeed { seed: TorrentSeed },
+    AddTorrentLeech { meta: MetaInfo },
 }
 
 /// The result of [`Bittorrent::handshake`].
 pub type HandshakeResult = Result<HandshakeOk, HandshakeError>;
+
+/// The result of a diskmanager task
+pub type DiskResult = Result<DiskMessageOut, ()>;
 
 /// The successful result of [`Bittorrent::handshake`].
 #[derive(Debug, Clone)]

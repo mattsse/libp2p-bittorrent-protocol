@@ -4,6 +4,7 @@ use crate::disk::block::{Block, BlockMetadata, BlockMut};
 use crate::disk::error::TorrentError;
 use crate::peer::BttPeer;
 use crate::piece::PieceSelection;
+use crate::proto::message::Handshake;
 use crate::util::ShaHash;
 use bytes::BytesMut;
 use fnv::FnvHashMap;
@@ -37,11 +38,10 @@ pub struct TorrentPool<TInner> {
 pub enum TorrentPoolState<'a, TInner> {
     /// The pool is idle, i.e. there are no torrents to process.
     Idle,
-    /// At least one torrent is waiting for results. `Some(request)` indicates
-    /// that a new request is now being waited on.
-    Waiting(Option<(&'a mut Torrent<TInner>, PeerId)>),
+    /// At least one torrent is waiting to generate requests.
+    Waiting(&'a mut Torrent<TInner>),
     /// A block is ready to process
-    BlockReady((TorrentId, BlockBuffer)),
+    BlockReady(TorrentId, BlockBuffer),
     /// A torrent has finished.
     Finished(Torrent<TInner>),
     /// the peer we need to send a new KeepAlive msg
@@ -174,6 +174,10 @@ pub struct Torrent<TInner> {
 }
 
 impl<TInner> Torrent<TInner> {
+    pub fn id(&self) -> TorrentId {
+        self.id
+    }
+
     pub fn iter_peer_ids(&self) -> impl Iterator<Item = &PeerId> {
         self.peer_iter.peers.keys()
     }
