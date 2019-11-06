@@ -115,7 +115,7 @@ impl Decoder for PeerWireCodec {
                         PeerMessage::REQUEST_ID => {
                             let msg = src.split_to(msg_length);
                             Ok(Some(PeerMessage::Request {
-                                peer_request: PeerRequest {
+                                request: PeerRequest {
                                     index: BigEndian::read_u32(&msg[5..9]),
                                     begin: BigEndian::read_u32(&msg[9..13]),
                                     length: BigEndian::read_u32(&msg[13..17]),
@@ -135,7 +135,7 @@ impl Decoder for PeerWireCodec {
                         PeerMessage::CANCEL_ID => {
                             let msg = src.split_to(msg_length);
                             Ok(Some(PeerMessage::Cancel {
-                                peer_request: PeerRequest {
+                                request: PeerRequest {
                                     index: BigEndian::read_u32(&msg[5..9]),
                                     begin: BigEndian::read_u32(&msg[9..13]),
                                     length: BigEndian::read_u32(&msg[13..17]),

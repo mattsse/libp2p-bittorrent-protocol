@@ -35,10 +35,10 @@ pub enum PeerMessage {
         index_field: BitField,
     },
     Request {
-        peer_request: PeerRequest,
+        request: PeerRequest,
     },
     Cancel {
-        peer_request: PeerRequest,
+        request: PeerRequest,
     },
     Piece {
         piece: Piece,
@@ -82,7 +82,12 @@ impl PeerMessage {
             | PeerMessage::NotInterested => 1,
             PeerMessage::Have { .. } => 1 + 4,
             PeerMessage::Bitfield { index_field } => 1 + index_field.len(),
-            PeerMessage::Request { peer_request } | PeerMessage::Cancel { peer_request } => 1 + 12,
+            PeerMessage::Request {
+                request: peer_request,
+            }
+            | PeerMessage::Cancel {
+                request: peer_request,
+            } => 1 + 12,
             PeerMessage::Piece { piece } => 1 + 8 + piece.block.len(),
             PeerMessage::Handshake { handshake } => 45 + 19,
             PeerMessage::Port { .. } => 1 + 4,
@@ -120,7 +125,9 @@ impl PeerMessage {
                 buf.write_u8(5)?;
                 buf.write_all(&bytes)?;
             }
-            PeerMessage::Request { peer_request } => {
+            PeerMessage::Request {
+                request: peer_request,
+            } => {
                 buf.write_u32::<BigEndian>(13)?;
                 buf.write_u8(6)?;
                 buf.write_u32::<BigEndian>(peer_request.index)?;
@@ -134,7 +141,9 @@ impl PeerMessage {
                 buf.write_u32::<BigEndian>(piece.begin)?;
                 buf.write_all(&piece.block)?;
             }
-            PeerMessage::Cancel { peer_request } => {
+            PeerMessage::Cancel {
+                request: peer_request,
+            } => {
                 buf.write_u32::<BigEndian>(13)?;
                 buf.write_u8(8)?;
                 buf.write_u32::<BigEndian>(peer_request.index)?;
@@ -172,6 +181,16 @@ pub struct Handshake {
     pub info_hash: ShaHash,
     /// 20-byte string used as a unique ID for the client
     pub peer_id: ShaHash,
+}
+
+impl Handshake {
+    pub fn new(info_hash: ShaHash, peer_id: ShaHash) -> Self {
+        Self {
+            reserved: [0, 0, 0, 0, 0, 0, 0, 0],
+            info_hash,
+            peer_id,
+        }
+    }
 }
 
 impl Handshake {
