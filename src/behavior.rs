@@ -66,24 +66,17 @@ where
         }
     }
 
-    /// start handshaking with peers for specific hash
-    pub fn handshakes(&mut self, info_hash: ShaHash) {
-        let local_peer_hash = self.torrents.local_peer_hash.clone();
+    /// start handshaking with a peer for specific torrent
+    pub fn handshake(&mut self, info_hash: ShaHash, peer: TorrentPeer) {
         // TODO candidate identification should be a DHT lookup
-        // for now consider all connected peers potential candidates
-        for candidate_peer_id in self.torrents.iter_candidate_peer_ids(&info_hash) {
-            //            self.queued_events
-            //                .push_back(NetworkBehaviourAction::SendEvent {
-            //                    peer_id: candidate_peer_id.clone(),
-            //                    event: BittorrentHandlerIn::HandshakeReq {
-            //                        handshake: Handshake::new(
-            //                            torrent.info_hash.clone(),
-            //                            self.torrents.local_peer_hash.clone(),
-            //                        ),
-            //                        user_data: torrent.id(),
-            //                    },
-            //                });
-        }
+        self.queued_events
+            .push_back(NetworkBehaviourAction::SendEvent {
+                peer_id: peer.peer_id,
+                event: BittorrentHandlerIn::HandshakeReq {
+                    handshake: Handshake::new(info_hash, self.torrents.local_peer_hash.clone()),
+                    user_data: peer.torrent_id,
+                },
+            });
     }
 
     pub fn choke_peer(&mut self, peer_id: &PeerId) {

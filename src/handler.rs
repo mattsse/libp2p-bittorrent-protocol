@@ -463,7 +463,7 @@ pub enum BittorrentHandlerEvent<TUserData> {
         /// Custom data. Passed back in the out event when the results arrive.
         user_data: TUserData,
     },
-    /// Request to retrieve a piece from the peers.
+    /// Request to retrieve a piece.
     GetPieceReq {
         /// The id of the block.
         request: PeerRequest,
@@ -474,8 +474,10 @@ pub enum BittorrentHandlerEvent<TUserData> {
     },
     GetPieceRes {
         piece: Piece,
-        /// Custom data. Passed back in the out event when the results arrive.
-        user_data: TUserData,
+    },
+    CancelPiece {
+        request: PeerRequest,
+        request_id: BittorrentRequestId,
     },
     Choke {
         inner: ChokeType,
@@ -484,7 +486,7 @@ pub enum BittorrentHandlerEvent<TUserData> {
         inner: InterestType,
     },
     Have {
-        inner: u32,
+        index: u32,
     },
     /// An error happened when torrenting.
     TorrentErr {
@@ -696,15 +698,12 @@ where
         },
         SubstreamState::InWaitingMessage(id, mut substream) => match substream.poll() {
             Ok(Async::Ready(Some(msg))) => {
-                if let Ok(ev) = process_btt_in(msg, id) {
-                    (
-                        Some(SubstreamState::InWaitingUser(id, substream)),
-                        Some(ProtocolsHandlerEvent::Custom(ev)),
-                        false,
-                    )
-                } else {
-                    (Some(SubstreamState::InClosing(substream)), None, true)
-                }
+                let ev = process_btt_in(msg, id);
+                (
+                    Some(SubstreamState::InWaitingUser(id, substream)),
+                    Some(ProtocolsHandlerEvent::Custom(ev)),
+                    false,
+                )
             }
             Ok(Async::NotReady) => (
                 Some(SubstreamState::InWaitingMessage(id, substream)),
@@ -763,15 +762,44 @@ where
 fn process_btt_in<TUserData>(
     event: PeerMessage,
     connec_unique_id: UniqueConnecId,
-) -> Result<BittorrentHandlerEvent<TUserData>, io::Error> {
+) -> BittorrentHandlerEvent<TUserData> {
     match event {
-        //        PeerMessage::Handshake { handshake } => {
-        //            Ok(BittorrentHandlerEvent::HandshakeIn { handshake })
-        //        }
-        //        PeerMessage::Bitfield { index_field } => {
-        //            Ok(BittorrentHandlerEvent::BitfieldIn { index_field })
-        //        }
-        _ => unreachable!(),
+        PeerMessage::Handshake { handshake } => BittorrentHandlerEvent::HandshakeReq {
+            handshake,
+            request_id: BittorrentRequestId { connec_unique_id },
+        },
+        PeerMessage::Bitfield { index_field } => BittorrentHandlerEvent::BitfieldReq {
+            index_field,
+            request_id: BittorrentRequestId { connec_unique_id },
+        },
+
+        PeerMessage::KeepAlive => BittorrentHandlerEvent::KeepAlive,
+        PeerMessage::Choke => BittorrentHandlerEvent::Choke {
+            inner: ChokeType::Choked,
+        },
+        PeerMessage::UnChoke => BittorrentHandlerEvent::Choke {
+            inner: ChokeType::UnChoked,
+        },
+        PeerMessage::Interested => BittorrentHandlerEvent::Interest {
+            inner: InterestType::Interested,
+        },
+        PeerMessage::NotInterested => BittorrentHandlerEvent::Interest {
+            inner: InterestType::NotInterested,
+        },
+        PeerMessage::Have { index } => BittorrentHandlerEvent::Have { index },
+        PeerMessage::Request { request } => BittorrentHandlerEvent::GetPieceReq {
+            request,
+            request_id: BittorrentRequestId { connec_unique_id },
+        },
+        PeerMessage::Cancel { request } => BittorrentHandlerEvent::CancelPiece {
+            request,
+            request_id: BittorrentRequestId { connec_unique_id },
+        },
+        PeerMessage::Piece { piece } => BittorrentHandlerEvent::GetPieceRes { piece },
+        PeerMessage::Port { port } => {
+            // TODO
+            unimplemented!()
+        }
     }
 }
 

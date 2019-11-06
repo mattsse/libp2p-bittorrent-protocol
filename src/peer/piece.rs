@@ -220,7 +220,7 @@ pub struct TorrentPeer {
     /// the libp2p identifier
     pub peer_id: PeerId,
     /// the bittorrent id, necessary to for handshaking
-    pub peer_hash: ShaHash,
+    pub torrent_id: TorrentId,
 }
 
 pub struct BlockBuffer {
