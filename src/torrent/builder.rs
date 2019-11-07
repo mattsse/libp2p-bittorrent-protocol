@@ -26,7 +26,8 @@ pub struct TorrentBuilder {
     announce_list: Option<Vec<String>>,
     webseeds: Option<Vec<String>>,
     httpseeds: Option<Vec<String>>,
-    /// the name of the content, if none then the file name of `content_root` is used
+    /// the name of the content, if none then the file name of `content_root` is
+    /// used
     name: Option<String>,
     encoding: Option<String>,
     comment: Option<String>,
@@ -148,10 +149,13 @@ impl TorrentBuilder {
         self
     }
 
-    /// For torrents up to 1 GiB, the maximum number of pieces is 1000 which means the maximum piece size is 1 MiB.
-    /// With increasing torrent size, both the number of pieces and the maximum piece size are increased.
-    /// For torrents between 32 and 80 GiB a maximum piece size of 8 MiB is maintained by increasing the number of pieces up to 10,000.
-    /// For torrents larger than 80 GiB the piece size is 16 MiB, using as many pieces as necessary.
+    /// For torrents up to 1 GiB, the maximum number of pieces is 1000 which
+    /// means the maximum piece size is 1 MiB. With increasing torrent size,
+    /// both the number of pieces and the maximum piece size are increased.
+    /// For torrents between 32 and 80 GiB a maximum piece size of 8 MiB is
+    /// maintained by increasing the number of pieces up to 10,000.
+    /// For torrents larger than 80 GiB the piece size is 16 MiB, using as many
+    /// pieces as necessary.
     fn compute_piece_length(&self) -> io::Result<usize> {
         let mut size = 0;
         for entry in WalkDir::new(&self.content_root)
@@ -181,7 +185,6 @@ impl TorrentBuilder {
     }
 
     /// Build a `MetaInfo` object from this `TorrentBuilder`.
-    ///
     pub fn build(self) -> Result<MetaInfo, Error> {
         let piece_length = self.piece_length.unwrap_or(self.compute_piece_length()?);
         let (content, pieces) = self.read_content(piece_length)?;
@@ -279,7 +282,8 @@ impl TorrentBuilder {
         })
     }
 
-    /// returns the length of the file and the hashed pieces and potential unfinished bits
+    /// returns the length of the file and the hashed pieces and potential
+    /// unfinished bits
     fn read_file<P: AsRef<Path>>(
         &self,
         path: P,

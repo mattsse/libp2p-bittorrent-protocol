@@ -16,9 +16,10 @@ pub struct PeerRequest {
     pub length: u32,
 }
 
-/// All of the remaining messages in the protocol take the form of <length prefix><message ID><payload>.
-/// The length prefix is a four byte big-endian value. The message ID is a single decimal byte.
-/// integers in the peer wire protocol are encoded as four byte big-endian values
+/// All of the remaining messages in the protocol take the form of <length
+/// prefix><message ID><payload>. The length prefix is a four byte big-endian
+/// value. The message ID is a single decimal byte. integers in the peer wire
+/// protocol are encoded as four byte big-endian values
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerMessage {
     /// heartbeat generally 2 minute interval
@@ -31,7 +32,8 @@ pub enum PeerMessage {
         index: u32,
     },
     Bitfield {
-        /// bitfield representing the pieces that have been successfully downloaded
+        /// bitfield representing the pieces that have been successfully
+        /// downloaded
         index_field: BitField,
     },
     Request {
@@ -46,9 +48,10 @@ pub enum PeerMessage {
     Handshake {
         handshake: Handshake,
     },
-    /// he port message is sent by newer versions of the Mainline that implements a DHT tracker.
-    /// The listen port is the port this peer's DHT node is listening on.
-    /// This peer should be inserted in the local routing table (if DHT tracker is supported).
+    /// he port message is sent by newer versions of the Mainline that
+    /// implements a DHT tracker. The listen port is the port this peer's
+    /// DHT node is listening on. This peer should be inserted in the local
+    /// routing table (if DHT tracker is supported).
     Port {
         port: u16,
     },
@@ -71,8 +74,10 @@ impl PeerMessage {
     pub const KEEP_ALIVE_ID: [u8; 4] = [0, 0, 0, 0];
 
     /// length in bytes that should be reserved for serialising the message.
-    /// Besides `PeerMessage::Handshake` all messages are prefixed by its length (4 byte big endian).
-    /// Besides `PeerMessage::KeepAlive` and `PeerMessage::Handshake` every message is identified by single decimal byte id
+    /// Besides `PeerMessage::Handshake` all messages are prefixed by its length
+    /// (4 byte big endian). Besides `PeerMessage::KeepAlive` and
+    /// `PeerMessage::Handshake` every message is identified by single decimal
+    /// byte id
     pub fn len(&self) -> usize {
         4 + match self {
             PeerMessage::KeepAlive => 0,
@@ -168,13 +173,16 @@ impl PeerMessage {
     }
 }
 
-/// The handshake is a required message and must be the first message transmitted by the client.
-/// `handshake: `<pstrlen><pstr><reserved><info_hash><peer_id>`
+/// The handshake is a required message and must be the first message
+/// transmitted by the client. `handshake:
+/// `<pstrlen><pstr><reserved><info_hash><peer_id>`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Handshake {
     /// eight (8) reserved bytes. All current implementations use all zeroes.
-    /// Each bit in these bytes can be used to change the behavior of the protocol.
-    /// An email from Bram suggests that trailing bits should be used first, so that leading bits may be used to change the meaning of trailing bits.
+    /// Each bit in these bytes can be used to change the behavior of the
+    /// protocol. An email from Bram suggests that trailing bits should be
+    /// used first, so that leading bits may be used to change the meaning of
+    /// trailing bits.
     pub reserved: [u8; 8],
     /// 20-byte SHA1 hash of the info key in the metainfo file.
     /// This is the same info_hash that is transmitted in tracker requests.

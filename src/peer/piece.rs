@@ -15,10 +15,11 @@ use std::path::PathBuf;
 use std::time::Duration;
 use wasm_timer::Instant;
 
-/// A `TorrentPool` provides an aggregate state machine for driving the Torrent#s `Piece`s to completion.
+/// A `TorrentPool` provides an aggregate state machine for driving the
+/// Torrent#s `Piece`s to completion.
 ///
-/// Internally, a `TorrentInner` is in turn driven by an underlying `TorrentPeerIter`
-/// that determines the peer selection strategy.
+/// Internally, a `TorrentInner` is in turn driven by an underlying
+/// `TorrentPeerIter` that determines the peer selection strategy.
 pub struct TorrentPool<TInner> {
     pub local_peer_hash: ShaHash,
     pub local_peer_id: PeerId,
@@ -109,7 +110,8 @@ impl<TInner> TorrentPool<TInner> {
             .flat_map(Torrent::iter_peer_ids)
     }
 
-    /// Returns a reference to a torrent with the given ID, if it is in the pool.
+    /// Returns a reference to a torrent with the given ID, if it is in the
+    /// pool.
     pub fn get(&self, id: &TorrentId) -> Option<&Torrent<TInner>> {
         self.torrents.get(id)
     }
@@ -143,7 +145,8 @@ impl<TInner> TorrentPool<TInner> {
             .filter(|torrent| torrent.state == SeedLeechConfig::Seed)
     }
 
-    /// Returns a mutablereference to a torrent with the given ID, if it is in the pool.
+    /// Returns a mutablereference to a torrent with the given ID, if it is in
+    /// the pool.
     pub fn get_mut(&mut self, id: &TorrentId) -> Option<&mut Torrent<TInner>> {
         self.torrents.get_mut(id)
     }

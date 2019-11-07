@@ -32,8 +32,8 @@ pub struct BittorrentProtocolConfig {
 }
 
 impl BittorrentProtocolConfig {
-    /// Modifies the protocol name used on the wire. Can be used to create incompatibilities
-    /// between networks on purpose.
+    /// Modifies the protocol name used on the wire. Can be used to create
+    /// incompatibilities between networks on purpose.
     pub fn with_protocol_name(mut self, name: impl Into<Cow<'static, [u8]>>) -> Self {
         self.protocol_name = name.into();
         self

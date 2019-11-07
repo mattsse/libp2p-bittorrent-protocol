@@ -485,7 +485,8 @@ impl InfoContent {
 pub struct SubFileInfo {
     /// The length of the file in bytes
     pub length: u64,
-    /// A list of UTF-8 encoded strings corresponding to subdirectory names, the last of which is the actual file name.
+    /// A list of UTF-8 encoded strings corresponding to subdirectory names, the
+    /// last of which is the actual file name.
     pub paths: Vec<String>,
 }
 
@@ -496,7 +497,8 @@ impl SubFileInfo {
         self.paths.last().map(String::as_str)
     }
 
-    /// returns the complete Path of the file including its parent directories, but without the root directory of the torrent
+    /// returns the complete Path of the file including its parent directories,
+    /// but without the root directory of the torrent
     #[inline]
     pub fn relative_file_path(&self) -> PathBuf {
         self.paths

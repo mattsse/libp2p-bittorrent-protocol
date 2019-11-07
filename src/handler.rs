@@ -26,8 +26,8 @@ use wasm_timer::Instant;
 
 /// Protocol handler that handles Bittorrent communications with the remote.
 ///
-/// The handler will automatically open a Bittorrent substream with the remote for each request we
-/// make.
+/// The handler will automatically open a Bittorrent substream with the remote
+/// for each request we make.
 ///
 /// It also handles requests made by the remote.
 pub struct BittorrentHandler<TSubstream, TUserData>
@@ -50,13 +50,14 @@ impl<TSubstream, TUserData> BittorrentHandler<TSubstream, TUserData>
 where
     TSubstream: AsyncRead + AsyncWrite,
 {
-    /// Create a `BittorrentHandler` that only allows leeching from remote but denying
-    /// incoming piece request.
+    /// Create a `BittorrentHandler` that only allows leeching from remote but
+    /// denying incoming piece request.
     pub fn leech_only() -> Self {
         BittorrentHandler::with_seed_leech_config(SeedLeechConfig::Leech)
     }
 
-    /// Create a `BittorrentHandler` that only allows seeding to remotes but doesn't request any pieces.
+    /// Create a `BittorrentHandler` that only allows seeding to remotes but
+    /// doesn't request any pieces.
     pub fn seed_only() -> Self {
         BittorrentHandler::with_seed_leech_config(SeedLeechConfig::Seed)
     }
@@ -83,7 +84,8 @@ where
     TSubstream: AsyncRead + AsyncWrite,
 {
     /// We haven't started opening the outgoing substream yet.
-    /// Contains the request we want to send, and the user data if we expect an answer.
+    /// Contains the request we want to send, and the user data if we expect an
+    /// answer.
     OutPendingOpen(PeerMessage, Option<TUserData>),
     /// Waiting to send a message to the remote.
     OutPendingSend(BttStreamSink<TSubstream>, PeerMessage, Option<TUserData>),
@@ -91,13 +93,15 @@ where
     OutPendingFlush(BttStreamSink<TSubstream>, Option<TUserData>),
     /// Waiting for an answer back from the remote.
     OutWaitingAnswer(BttStreamSink<TSubstream>, TUserData, Instant),
-    /// An error happened on the substream and we should report the error to the user.
+    /// An error happened on the substream and we should report the error to the
+    /// user.
     OutReportError(BittorrentHandlerTorrentErr, TUserData),
     /// The substream is being closed.
     OutClosing(BttStreamSink<TSubstream>),
     /// Waiting for a request from the remote.
     InWaitingMessage(UniqueConnecId, BttStreamSink<TSubstream>),
-    /// Waiting for the user to send a `BittorrentHandlerIn` event containing the response.
+    /// Waiting for the user to send a `BittorrentHandlerIn` event containing
+    /// the response.
     InWaitingUser(UniqueConnecId, BttStreamSink<TSubstream>),
     /// Waiting to send an answer back to the remote.
     InPendingSend(UniqueConnecId, BttStreamSink<TSubstream>, PeerMessage),
@@ -130,7 +134,8 @@ where
     type Substream = TSubstream;
     type InboundProtocol = BittorrentProtocolConfig;
     type OutboundProtocol = BittorrentProtocolConfig;
-    // Message of the request to send to the remote, and user data if we expect an answer.
+    // Message of the request to send to the remote, and user data if we expect an
+    // answer.
     type OutboundOpenInfo = (PeerMessage, Option<TUserData>);
 
     fn listen_protocol(&self) -> SubstreamProtocol<Self::InboundProtocol> {
@@ -158,8 +163,9 @@ where
     }
 
     fn inject_event(&mut self, message: BittorrentHandlerIn<TUserData>) {
-        // If a client receives a handshake with an info_hash that it is not currently serving, then the client must drop the connection.
-        // open one substream per request
+        // If a client receives a handshake with an info_hash that it is not currently
+        // serving, then the client must drop the connection. open one substream
+        // per request
         let _ = match message {
             BittorrentHandlerIn::Reset(request_id) => {
                 let pos = self.substreams.iter().position(|state| match state {
@@ -393,8 +399,9 @@ pub enum BittorrentHandlerIn<TUserData> {
         handshake: Handshake,
         request_id: BittorrentRequestId,
     },
-    /// The bitfield message may only be sent immediately after the handshaking sequence is completed, and before any other messages are sent.
-    /// It is optional, and need not be sent if a client has no pieces
+    /// The bitfield message may only be sent immediately after the handshaking
+    /// sequence is completed, and before any other messages are sent. It is
+    /// optional, and need not be sent if a client has no pieces
     BitfieldReq {
         index_field: BitField,
         /// Custom data. Passed back in the out event when the results arrive.
@@ -450,8 +457,9 @@ pub enum BittorrentHandlerEvent<TUserData> {
         /// Custom data. Passed back in the out event when the results arrive.
         user_data: TUserData,
     },
-    /// The bitfield message may only be sent immediately after the handshaking sequence is completed, and before any other messages are sent.
-    /// It is optional, and need not be sent if a client has no pieces
+    /// The bitfield message may only be sent immediately after the handshaking
+    /// sequence is completed, and before any other messages are sent. It is
+    /// optional, and need not be sent if a client has no pieces
     BitfieldReq {
         index_field: BitField,
         request_id: BittorrentRequestId,
@@ -499,11 +507,11 @@ pub enum BittorrentHandlerEvent<TUserData> {
     KeepAlive,
 }
 
-/// Unique identifier for a request. Must be passed back in order to answer a request from
-/// the remote.
+/// Unique identifier for a request. Must be passed back in order to answer a
+/// request from the remote.
 ///
-/// We don't implement `Clone` on purpose, in order to prevent users from answering the same
-/// request twice.
+/// We don't implement `Clone` on purpose, in order to prevent users from
+/// answering the same request twice.
 #[derive(Debug, PartialEq, Eq)]
 pub struct BittorrentRequestId {
     /// Unique identifier for an incoming connection.
@@ -561,8 +569,8 @@ impl From<ProtocolsHandlerUpgrErr<io::Error>> for BittorrentHandlerTorrentErr {
 
 /// Advances one substream.
 ///
-/// Returns the new state for that substream, an event to generate, and whether the substream
-/// should be polled again.
+/// Returns the new state for that substream, an event to generate, and whether
+/// the substream should be polled again.
 fn advance_substream<TSubstream, TUserData>(
     state: SubstreamState<TSubstream, TUserData>,
     upgrade: BittorrentProtocolConfig,
@@ -762,7 +770,8 @@ where
     }
 }
 
-/// Processes a Bittorrent message that's expected to be a request from a remote.
+/// Processes a Bittorrent message that's expected to be a request from a
+/// remote.
 fn process_btt_in<TUserData>(
     event: PeerMessage,
     connec_unique_id: UniqueConnecId,
@@ -810,7 +819,9 @@ fn process_btt_in<TUserData>(
     }
 }
 
-/// Process a Bittorrent message that's supposed to be a response to one of our requests. Since we open a new substream for each message, receiving a message or an request shouldn't happen and we return an error instead
+/// Process a Bittorrent message that's supposed to be a response to one of our
+/// requests. Since we open a new substream for each message, receiving a
+/// message or an request shouldn't happen and we return an error instead
 fn process_btt_out<TUserData>(
     msg: PeerMessage,
     user_data: TUserData,

@@ -22,7 +22,8 @@ use std::path::{Path, PathBuf};
 use tokio_fs::file::{OpenFuture, SeekFuture};
 use tokio_fs::OpenOptions;
 
-/// `DiskManager` object which handles the storage of `Blocks` to the `FileSystem`.
+/// `DiskManager` object which handles the storage of `Blocks` to the
+/// `FileSystem`.
 pub struct DiskManager<TFileSystem: FileSystem> {
     active_blocks: Vec<BlockIn<TFileSystem::File>>,
     file_cache: LruCache<TorrentFileId, FileState<TFileSystem::File>>,
@@ -58,7 +59,8 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
             .push_back(DiskMessageIn::ReadBlock(torrent_id, metadata));
     }
 
-    /// removes the torrent, means future request targeting to read/load a block from the torrent won't succeed
+    /// removes the torrent, means future request targeting to read/load a block
+    /// from the torrent won't succeed
     fn remove_torrent(&mut self, id: TorrentId) -> DiskMessageOut {
         if let Some(file) = self.torrents.take(&id) {
             DiskMessageOut::TorrentRemoved(id, file.meta_info)
@@ -223,7 +225,8 @@ impl<TFileSystem: FileSystem> Future for DiskManager<TFileSystem> {
             // try to poll pending diskmessages directly
             // skip busy files
 
-            //                if let Some(mut handles) = self.files.get_mut(&block.piece_index()) {
+            //                if let Some(mut handles) =
+            // self.files.get_mut(&block.piece_index()) {
             //
             //                    for h in (0..handles.len()).rev() {
             //                        let mut block = handles.swap_remove(h) {
@@ -232,7 +235,8 @@ impl<TFileSystem: FileSystem> Future for DiskManager<TFileSystem> {
             //                    }
             //                } else {
             //                    let (hash, files) =
-            //                        self.meta.info.files_for_piece_index(block.piece_index())?;
+            //                        
+            // self.meta.info.files_for_piece_index(block.piece_index())?;
 
             //                }
 

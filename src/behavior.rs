@@ -51,7 +51,8 @@ impl<TSubstream, TFileSystem> Bittorrent<TSubstream, TFileSystem>
 where
     TFileSystem: FileSystem,
 {
-    /// Creates a new `Bittorrent` network behaviour with the given configuration.
+    /// Creates a new `Bittorrent` network behaviour with the given
+    /// configuration.
     pub fn with_config<T: Into<TFileSystem>>(
         peer_id: PeerId,
         filesystem: T,
@@ -243,7 +244,8 @@ where
 
     /// send from the handler
     fn inject_node_event(&mut self, peer_id: PeerId, event: BittorrentHandlerEvent<TorrentId>) {
-        // torrents are identified by peer + active torrent id as user data in the handler event
+        // torrents are identified by peer + active torrent id as user data in the
+        // handler event
 
         unimplemented!()
     }

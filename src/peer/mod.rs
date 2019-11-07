@@ -8,7 +8,8 @@ use wasm_timer::Instant;
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum ChokeType {
     /// remote has chocked the client
-    /// When a peer chokes the client, it is a notification that no requests will be answered until the client is unchoked.
+    /// When a peer chokes the client, it is a notification that no requests
+    /// will be answered until the client is unchoked.
     Choked = 0,
     /// client currently accepts request
     UnChoked = 1,
@@ -72,7 +73,8 @@ pub struct PeerStats {
     pub send_blocks: usize,
 }
 
-/// peer's IP address either IPv6 (hexed) or IPv4 (dotted quad) or DNS name (string)
+/// peer's IP address either IPv6 (hexed) or IPv4 (dotted quad) or DNS name
+/// (string)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerIp {
     Ip4,

@@ -67,7 +67,8 @@ impl TorrentFile {
     }
 
     /// return all files that are related to the targeted block
-    /// in case there is an overlap, multi entries with their adjusted metadatas are returned
+    /// in case there is an overlap, multi entries with their adjusted metadatas
+    /// are returned
     pub fn files_for_block(
         &self,
         metadata: BlockMetadata,
@@ -141,8 +142,8 @@ pub struct FileEntry {
     pub id: TorrentFileId,
     /// the offset of this file inside the torrent
     pub offset: u64,
-    /// the size of the file (in bytes) of the file within the torrent. i.e. the sum of all the sizes of the files
-    /// before it in the list.
+    /// the size of the file (in bytes) of the file within the torrent. i.e. the
+    /// sum of all the sizes of the files before it in the list.
     pub size: u64,
 }
 

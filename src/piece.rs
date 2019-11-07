@@ -27,7 +27,8 @@ pub enum PieceOwnerShip {
 pub enum PieceSelection {
     /// select a random piece
     RandomFirst,
-    /// Once peers finish downloading the current piece, it will select the next piece which is the fewest among its neighbors
+    /// Once peers finish downloading the current piece, it will select the next
+    /// piece which is the fewest among its neighbors
     RarestFirst,
 }
 
