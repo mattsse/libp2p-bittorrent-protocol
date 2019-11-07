@@ -1,9 +1,6 @@
-pub mod codec;
-pub mod message;
-pub mod tracker;
+use std::{borrow::Cow, convert::TryFrom, time::Duration};
+use std::{io, iter};
 
-use crate::proto::codec::PeerWireCodec;
-use crate::proto::message::PeerMessage;
 use bytes::BytesMut;
 use futures::{
     future::{self, FutureResult},
@@ -12,11 +9,16 @@ use futures::{
 use libp2p_core::upgrade::{InboundUpgrade, Negotiated, OutboundUpgrade, UpgradeInfo};
 use libp2p_core::{Multiaddr, PeerId};
 use sha1::Sha1;
-use std::{borrow::Cow, convert::TryFrom, time::Duration};
-use std::{io, iter};
 use tokio_codec::Framed;
 use tokio_io::{AsyncRead, AsyncWrite};
 use wasm_timer::Instant;
+
+use crate::proto::codec::PeerWireCodec;
+use crate::proto::message::PeerMessage;
+
+pub mod codec;
+pub mod message;
+pub mod tracker;
 
 /// Creates an `io::Error` with `io::ErrorKind::InvalidData`.
 fn invalid_data<E>(e: E) -> io::Error

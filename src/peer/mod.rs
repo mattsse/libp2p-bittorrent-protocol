@@ -1,8 +1,10 @@
-pub mod piece;
-use crate::bitfield::BitField;
-use crate::util::ShaHash;
 use libp2p_core::PeerId;
 use wasm_timer::Instant;
+
+use crate::bitfield::BitField;
+use crate::util::ShaHash;
+
+pub mod piece;
 
 /// Status of our connection to a node reported by the BitTorrent protocol.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]

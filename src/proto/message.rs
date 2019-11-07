@@ -1,10 +1,12 @@
+use std::convert::TryInto;
+use std::io::{self, Read, Write};
+
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+
 use crate::bitfield::BitField;
 use crate::error::Error;
 use crate::piece::Piece;
 use crate::util::ShaHash;
-use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use std::convert::TryInto;
-use std::io::{self, Read, Write};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerRequest {

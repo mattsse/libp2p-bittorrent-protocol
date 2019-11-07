@@ -1,12 +1,14 @@
+use std::convert::TryInto;
+use std::io::{self, Read};
+
+use byteorder::{BigEndian, ByteOrder};
+use bytes::{Buf, BufMut, BytesMut, IntoBuf};
+use tokio_codec::{Decoder, Encoder};
+
 use crate::bitfield::BitField;
 use crate::error::Error;
 use crate::piece::{Piece, BLOCK_SIZE_MAX};
 use crate::proto::message::{Handshake, PeerMessage, PeerRequest};
-use byteorder::{BigEndian, ByteOrder};
-use bytes::{Buf, BufMut, BytesMut, IntoBuf};
-use std::convert::TryInto;
-use std::io::{self, Read};
-use tokio_codec::{Decoder, Encoder};
 
 pub struct PeerWireCodec {
     /// maximum permitted number of bytes per frame

@@ -1,5 +1,19 @@
 //! Implementation of the `Bittorrent` network behaviour.
 
+use std::borrow::Cow;
+use std::collections::VecDeque;
+use std::convert::TryInto;
+use std::path::PathBuf;
+
+use bitflags::_core::marker::PhantomData;
+use fnv::{FnvHashMap, FnvHashSet};
+use futures::{Async, Future};
+use libp2p_core::{ConnectedPoint, Multiaddr, PeerId};
+use libp2p_swarm::{NetworkBehaviour, NetworkBehaviourAction, PollParameters, ProtocolsHandler};
+use smallvec::SmallVec;
+use tokio_io::{AsyncRead, AsyncWrite};
+use wasm_timer::Instant;
+
 use crate::disk::message::DiskMessageOut;
 use crate::peer::BttPeer;
 use crate::proto::message::Handshake;
@@ -16,18 +30,6 @@ use crate::{
     torrent::MetaInfo,
     util::ShaHash,
 };
-use bitflags::_core::marker::PhantomData;
-use fnv::{FnvHashMap, FnvHashSet};
-use futures::{Async, Future};
-use libp2p_core::{ConnectedPoint, Multiaddr, PeerId};
-use libp2p_swarm::{NetworkBehaviour, NetworkBehaviourAction, PollParameters, ProtocolsHandler};
-use smallvec::SmallVec;
-use std::borrow::Cow;
-use std::collections::VecDeque;
-use std::convert::TryInto;
-use std::path::PathBuf;
-use tokio_io::{AsyncRead, AsyncWrite};
-use wasm_timer::Instant;
 
 /// Network behaviour that handles Bittorrent.
 pub struct Bittorrent<TSubstream, TFileSystem>

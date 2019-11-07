@@ -1,8 +1,9 @@
+use std::path::{Path, PathBuf};
+
 use crate::disk::error::TorrentError;
 use crate::error::Result;
 use crate::torrent::MetaInfo;
 use crate::util::ShaHash;
-use std::path::{Path, PathBuf};
 
 /// used to document the progress of a torrent for restarting purposes
 pub struct TorrentProgress {

@@ -1,3 +1,19 @@
+use std::fmt;
+use std::io;
+use std::path::PathBuf;
+use std::time::Duration;
+
+use futures::prelude::*;
+use libp2p_core::{
+    either::EitherOutput,
+    upgrade::{self, InboundUpgrade, Negotiated, OutboundUpgrade},
+};
+use libp2p_swarm::{
+    KeepAlive, ProtocolsHandler, ProtocolsHandlerEvent, ProtocolsHandlerUpgrErr, SubstreamProtocol,
+};
+use tokio_io::{AsyncRead, AsyncWrite};
+use wasm_timer::Instant;
+
 use crate::behavior::{Bittorrent, SeedLeechConfig};
 use crate::bitfield::BitField;
 use crate::disk::torrent::TorrentSeed;
@@ -9,20 +25,6 @@ use crate::proto::message::{Handshake, PeerMessage, PeerRequest};
 use crate::proto::{BittorrentProtocolConfig, BttStreamSink};
 use crate::torrent::MetaInfo;
 use crate::util::ShaHash;
-use futures::prelude::*;
-use libp2p_core::{
-    either::EitherOutput,
-    upgrade::{self, InboundUpgrade, Negotiated, OutboundUpgrade},
-};
-use libp2p_swarm::{
-    KeepAlive, ProtocolsHandler, ProtocolsHandlerEvent, ProtocolsHandlerUpgrErr, SubstreamProtocol,
-};
-use std::fmt;
-use std::io;
-use std::path::PathBuf;
-use std::time::Duration;
-use tokio_io::{AsyncRead, AsyncWrite};
-use wasm_timer::Instant;
 
 /// Protocol handler that handles Bittorrent communications with the remote.
 ///
@@ -119,7 +121,26 @@ where
     ///
     /// If the substream is not ready to be closed, returns it back.
     fn try_close(self) -> AsyncSink<Self> {
-        unimplemented!()
+        match self {
+            SubstreamState::OutPendingOpen(_, _) | SubstreamState::OutReportError(_, _) => {
+                AsyncSink::Ready
+            }
+            SubstreamState::OutPendingSend(mut stream, _, _)
+            | SubstreamState::OutPendingFlush(mut stream, _)
+            | SubstreamState::OutWaitingAnswer(mut stream, _, _)
+            | SubstreamState::OutClosing(mut stream) => match stream.close() {
+                Ok(Async::Ready(())) | Err(_) => AsyncSink::Ready,
+                Ok(Async::NotReady) => AsyncSink::NotReady(SubstreamState::OutClosing(stream)),
+            },
+            SubstreamState::InWaitingMessage(_, mut stream)
+            | SubstreamState::InWaitingUser(_, mut stream)
+            | SubstreamState::InPendingSend(_, mut stream, _)
+            | SubstreamState::InPendingFlush(_, mut stream)
+            | SubstreamState::InClosing(mut stream) => match stream.close() {
+                Ok(Async::Ready(())) | Err(_) => AsyncSink::Ready,
+                Ok(Async::NotReady) => AsyncSink::NotReady(SubstreamState::InClosing(stream)),
+            },
+        }
     }
 }
 
@@ -162,11 +183,11 @@ where
             .push(SubstreamState::OutPendingSend(protocol, msg, user_data));
     }
 
+    /// If a client receives a handshake with an info_hash that it is not
+    /// currently serving, then the client must drop the connection. open
+    /// one substream per request
     fn inject_event(&mut self, message: BittorrentHandlerIn<TUserData>) {
-        // If a client receives a handshake with an info_hash that it is not currently
-        // serving, then the client must drop the connection. open one substream
-        // per request
-        let _ = match message {
+        match message {
             BittorrentHandlerIn::Reset(request_id) => {
                 let pos = self.substreams.iter().position(|state| match state {
                     SubstreamState::InWaitingUser(conn_id, _) => {
@@ -313,9 +334,7 @@ where
                     ));
                 }
             }
-        };
-
-        unimplemented!()
+        }
     }
 
     #[inline]

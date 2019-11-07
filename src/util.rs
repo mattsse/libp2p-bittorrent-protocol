@@ -1,10 +1,11 @@
-use libp2p_core::multiaddr::multihash;
-use sha1::{Digest, Sha1};
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::fs;
 use std::io::{self, BufReader, Read};
 use std::path::Path;
+
+use libp2p_core::multiaddr::multihash;
+use sha1::{Digest, Sha1};
 
 /// Length of a SHA-1 hash.
 pub const SHA_HASH_LEN: usize = 20;

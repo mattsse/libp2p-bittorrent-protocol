@@ -1,5 +1,6 @@
-use crate::disk::block::BlockMetadata;
 use std::collections::{HashMap, HashSet};
+
+use crate::disk::block::BlockMetadata;
 
 /// smallest allowed piece size : 16 KB
 pub const BLOCK_SIZE_MIN: usize = 16384;

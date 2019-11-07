@@ -1,6 +1,7 @@
-use crate::piece::PieceState;
 use bit_vec::BitVec;
 use bitflags::_core::ops::{Deref, DerefMut};
+
+use crate::piece::PieceState;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BitField {

@@ -1,11 +1,13 @@
+use std::io::SeekFrom;
+use std::ops::{Deref, DerefMut};
+
+use bytes::{Bytes, BytesMut};
+use futures::Async;
+
 use crate::disk::error::TorrentError;
 use crate::disk::file::TorrentFileId;
 use crate::disk::fs::FileSystem;
 use crate::util::{ShaHash, SHA_HASH_LEN};
-use bytes::{Bytes, BytesMut};
-use futures::Async;
-use std::io::SeekFrom;
-use std::ops::{Deref, DerefMut};
 
 /// `BlockMetadata` which tracks metadata associated with a `Block` of memory.
 #[derive(Copy, Clone, Hash, PartialEq, Eq, Debug)]

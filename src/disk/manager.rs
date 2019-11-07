@@ -1,3 +1,16 @@
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::io;
+use std::io::SeekFrom;
+use std::path::{Path, PathBuf};
+
+use bit_vec::BitBlock;
+use fnv::{FnvHashMap, FnvHashSet};
+use futures::future::Either;
+use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
+use lru_cache::LruCache;
+use tokio_fs::file::{OpenFuture, SeekFuture};
+use tokio_fs::OpenOptions;
+
 use crate::behavior::BittorrentEvent::BlockResult;
 use crate::disk::block::{
     Block, BlockFileRead, BlockFileWrite, BlockIn, BlockMetadata, BlockMut, BlockRead, BlockWrite,
@@ -10,17 +23,6 @@ use crate::disk::native::NativeFileSystem;
 use crate::peer::piece::TorrentId;
 use crate::torrent::MetaInfo;
 use crate::util::ShaHash;
-use bit_vec::BitBlock;
-use fnv::{FnvHashMap, FnvHashSet};
-use futures::future::Either;
-use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
-use lru_cache::LruCache;
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::io;
-use std::io::SeekFrom;
-use std::path::{Path, PathBuf};
-use tokio_fs::file::{OpenFuture, SeekFuture};
-use tokio_fs::OpenOptions;
 
 /// `DiskManager` object which handles the storage of `Blocks` to the
 /// `FileSystem`.
@@ -235,7 +237,7 @@ impl<TFileSystem: FileSystem> Future for DiskManager<TFileSystem> {
             //                    }
             //                } else {
             //                    let (hash, files) =
-            //                        
+            //
             // self.meta.info.files_for_piece_index(block.piece_index())?;
 
             //                }

@@ -1,15 +1,17 @@
-use crate::disk::block::{Block, BlockMut};
-use crate::disk::error::TorrentError;
-use crate::disk::fs::FileSystem;
-use crate::torrent::MetaInfo;
-use futures::{Async, Future};
 use std::collections::HashMap;
 use std::io;
 use std::io::{Error, SeekFrom};
 use std::path::{Path, PathBuf};
+
+use futures::{Async, Future};
 use tokio_fs::file::{OpenFuture, SeekFuture};
 use tokio_fs::{File, OpenOptions};
 use tokio_io::{AsyncRead, AsyncWrite};
+
+use crate::disk::block::{Block, BlockMut};
+use crate::disk::error::TorrentError;
+use crate::disk::fs::FileSystem;
+use crate::torrent::MetaInfo;
 
 /// File that exists on disk.
 pub struct NativeFile {

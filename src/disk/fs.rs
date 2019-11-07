@@ -1,8 +1,10 @@
-use crate::disk::block::{Block, BlockMut};
-use futures::Async;
 use std::io;
 use std::io::SeekFrom;
 use std::path::Path;
+
+use futures::Async;
+
+use crate::disk::block::{Block, BlockMut};
 
 /// Trait for performing operations on some file system.
 /// Provides the necessary abstractions for handling files

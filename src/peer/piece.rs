@@ -1,3 +1,13 @@
+use std::collections::VecDeque;
+use std::convert::TryInto;
+use std::path::PathBuf;
+use std::time::Duration;
+
+use bytes::BytesMut;
+use fnv::FnvHashMap;
+use libp2p_core::PeerId;
+use wasm_timer::Instant;
+
 use crate::behavior::{BittorrentConfig, SeedLeechConfig};
 use crate::bitfield::BitField;
 use crate::disk::block::{Block, BlockMetadata, BlockMut};
@@ -6,14 +16,6 @@ use crate::peer::BttPeer;
 use crate::piece::PieceSelection;
 use crate::proto::message::Handshake;
 use crate::util::ShaHash;
-use bytes::BytesMut;
-use fnv::FnvHashMap;
-use libp2p_core::PeerId;
-use std::collections::VecDeque;
-use std::convert::TryInto;
-use std::path::PathBuf;
-use std::time::Duration;
-use wasm_timer::Instant;
 
 /// A `TorrentPool` provides an aggregate state machine for driving the
 /// Torrent#s `Piece`s to completion.

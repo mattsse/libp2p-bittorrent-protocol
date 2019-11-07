@@ -1,14 +1,16 @@
-use crate::error::Error;
-use crate::piece::{BLOCK_SIZE_MAX, BLOCK_SIZE_MIN};
-use crate::torrent::{DhtNode, InfoContent, MetaInfo, SubFileInfo, TorrentInfo};
+use std::cmp::max;
+use std::io::{self, BufReader, Read};
+use std::path::{Path, PathBuf};
+
 use chrono::{DateTime, TimeZone, Utc};
 use futures::future::ok;
 use futures::{Future, Stream};
 use sha1::Sha1;
-use std::cmp::max;
-use std::io::{self, BufReader, Read};
-use std::path::{Path, PathBuf};
 use walkdir::{DirEntry, WalkDir};
+
+use crate::error::Error;
+use crate::piece::{BLOCK_SIZE_MAX, BLOCK_SIZE_MIN};
+use crate::torrent::{DhtNode, InfoContent, MetaInfo, SubFileInfo, TorrentInfo};
 
 /// ignore all hidden entries
 fn is_hidden(entry: &DirEntry) -> bool {

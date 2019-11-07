@@ -1,8 +1,10 @@
-use crate::disk::error::TorrentError;
+use std::io;
+
 use bendy::decoding::Error as DecodingError;
 use bendy::encoding::Error as EncodingError;
 use snafu::{Backtrace, Snafu};
-use std::io;
+
+use crate::disk::error::TorrentError;
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 

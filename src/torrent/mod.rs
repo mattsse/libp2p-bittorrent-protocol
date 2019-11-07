@@ -1,9 +1,10 @@
-pub mod builder;
+use std::borrow::Cow;
+use std::convert::TryInto;
+use std::fmt;
+use std::fs::File;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 
-use crate::bitfield::BitField;
-use crate::disk::error::TorrentError;
-use crate::error::Result;
-use crate::util::{ShaHash, SHA_HASH_LEN};
 use bendy::decoding::{Decoder, DictDecoder, ListDecoder};
 use bendy::encoding::SingleItemEncoder;
 use bendy::{
@@ -12,12 +13,13 @@ use bendy::{
 };
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use sha1::{Sha1, DIGEST_LENGTH};
-use std::borrow::Cow;
-use std::convert::TryInto;
-use std::fmt;
-use std::fs::File;
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+
+use crate::bitfield::BitField;
+use crate::disk::error::TorrentError;
+use crate::error::Result;
+use crate::util::{ShaHash, SHA_HASH_LEN};
+
+pub mod builder;
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct MetaInfo {
