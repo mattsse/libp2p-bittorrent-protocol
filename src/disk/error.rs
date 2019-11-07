@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use snafu::Snafu;
 
 use crate::disk::block::BlockMetadata;
-use crate::peer::piece::TorrentId;
+use crate::peer::torrent::TorrentId;
 use crate::torrent::MetaInfo;
 use crate::util::ShaHash;
 

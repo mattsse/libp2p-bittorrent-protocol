@@ -20,7 +20,7 @@ use crate::disk::file::{FileEntry, TorrentFile, TorrentFileId};
 use crate::disk::fs::FileSystem;
 use crate::disk::message::{DiskMessageIn, DiskMessageOut};
 use crate::disk::native::NativeFileSystem;
-use crate::peer::piece::TorrentId;
+use crate::peer::torrent::TorrentId;
 use crate::torrent::MetaInfo;
 use crate::util::ShaHash;
 

@@ -11,7 +11,7 @@ use tokio_fs::OpenOptions;
 use crate::disk::block::{Block, BlockMetadata, BlockMut};
 use crate::disk::error::TorrentError;
 use crate::disk::message::{DiskMessageIn, DiskMessageOut};
-use crate::peer::piece::TorrentId;
+use crate::peer::torrent::TorrentId;
 use crate::torrent::{InfoContent, MetaInfo};
 use crate::util::ShaHash;
 

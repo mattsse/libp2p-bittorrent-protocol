@@ -18,7 +18,7 @@ use crate::behavior::{Bittorrent, SeedLeechConfig};
 use crate::bitfield::BitField;
 use crate::disk::torrent::TorrentSeed;
 use crate::error;
-use crate::peer::piece::{Torrent, TorrentId, TorrentPeer};
+use crate::peer::torrent::{Torrent, TorrentId, TorrentPeer};
 use crate::peer::{BttPeer, ChokeType, InterestType};
 use crate::piece::Piece;
 use crate::proto::message::{Handshake, PeerMessage, PeerRequest};
@@ -523,7 +523,9 @@ pub enum BittorrentHandlerEvent<TUserData> {
         /// The user data passed to the req.
         user_data: Option<TUserData>,
     },
-    KeepAlive,
+    KeepAlive {
+        timestamp: Instant,
+    },
 }
 
 /// Unique identifier for a request. Must be passed back in order to answer a
@@ -805,7 +807,9 @@ fn process_btt_in<TUserData>(
             request_id: BittorrentRequestId { connec_unique_id },
         },
 
-        PeerMessage::KeepAlive => BittorrentHandlerEvent::KeepAlive,
+        PeerMessage::KeepAlive => BittorrentHandlerEvent::KeepAlive {
+            timestamp: Instant::now(),
+        },
         PeerMessage::Choke => BittorrentHandlerEvent::Choke {
             inner: ChokeType::Choked,
         },

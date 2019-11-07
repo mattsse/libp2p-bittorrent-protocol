@@ -74,9 +74,14 @@ impl<TInner> TorrentPool<TInner> {
         }
     }
 
-    /// Returns an iterator over the pieces in the pool.
+    /// Returns an iterator over the torrents in the pool.
     pub fn iter(&self) -> impl Iterator<Item = &Torrent<TInner>> {
         self.torrents.values()
+    }
+
+    /// Returns an iterator over mutable torrents in the pool.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Torrent<TInner>> {
+        self.torrents.values_mut()
     }
 
     /// returns all peers that are currently related to the torrents hash

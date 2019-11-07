@@ -14,7 +14,9 @@ use smallvec::SmallVec;
 use tokio_io::{AsyncRead, AsyncWrite};
 use wasm_timer::Instant;
 
+use crate::disk::block::Block;
 use crate::disk::message::DiskMessageOut;
+use crate::peer::piece::PieceBuffer;
 use crate::peer::BttPeer;
 use crate::proto::message::Handshake;
 use crate::{
@@ -25,7 +27,7 @@ use crate::{
     handler::BittorrentHandler,
     handler::BittorrentHandlerEvent,
     handler::BittorrentHandlerIn,
-    peer::piece::{BlockBuffer, Torrent, TorrentId, TorrentPeer, TorrentPool, TorrentPoolState},
+    peer::torrent::{Torrent, TorrentId, TorrentPeer, TorrentPool, TorrentPoolState},
     piece::PieceSelection,
     torrent::MetaInfo,
     util::ShaHash,
@@ -135,19 +137,20 @@ where
             });
     }
 
+    /// update the keep alive status of the torrent
+    fn update_keep_alive(&mut self, peer_id: &PeerId, timestamp: Instant) {}
+
     /// Handles a block for a specific torrent
-    fn block_ready(
-        &mut self,
-        torrent_id: TorrentId,
-        buffer: BlockBuffer,
-    ) -> Option<BittorrentEvent> {
-        match buffer.try_into() {
-            Ok(block) => {
-                self.disk_manager.write_block(torrent_id, block);
-                None
-            }
-            Err(err) => Some(BittorrentEvent::BlockResult(Err(err))),
-        }
+    fn block_ready(&mut self, torrent_id: TorrentId, buffer: Block) -> Option<BittorrentEvent> {
+        unimplemented!()
+
+        //        match buffer.try_into() {
+        //            Ok(block) => {
+        //                self.disk_manager.write_block(torrent_id, block);
+        //                None
+        //            }
+        //            Err(err) => Some(BittorrentEvent::BlockResult(Err(err))),
+        //        }
     }
 
     /// Handles a finished (i.e. successful) piece.
@@ -246,10 +249,22 @@ where
 
     /// send from the handler
     fn inject_node_event(&mut self, peer_id: PeerId, event: BittorrentHandlerEvent<TorrentId>) {
-        // torrents are identified by peer + active torrent id as user data in the
-        // handler event
-
-        unimplemented!()
+        match event {
+            BittorrentHandlerEvent::HandshakeReq { .. } => {}
+            BittorrentHandlerEvent::HandshakeRes { .. } => {}
+            BittorrentHandlerEvent::BitfieldReq { .. } => {}
+            BittorrentHandlerEvent::BitfieldRes { .. } => {}
+            BittorrentHandlerEvent::GetPieceReq { .. } => {}
+            BittorrentHandlerEvent::GetPieceRes { .. } => {}
+            BittorrentHandlerEvent::CancelPiece { .. } => {}
+            BittorrentHandlerEvent::Choke { .. } => {}
+            BittorrentHandlerEvent::Interest { .. } => {}
+            BittorrentHandlerEvent::Have { .. } => {}
+            BittorrentHandlerEvent::TorrentErr { .. } => {}
+            BittorrentHandlerEvent::KeepAlive { timestamp } => {
+                self.update_keep_alive(&peer_id, timestamp)
+            }
+        }
     }
 
     /// send to user or handler
