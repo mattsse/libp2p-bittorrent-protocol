@@ -45,7 +45,7 @@ impl BittorrentProtocolConfig {
 impl Default for BittorrentProtocolConfig {
     fn default() -> Self {
         BittorrentProtocolConfig {
-            protocol_name: Cow::Borrowed(b"//1.0.0"),
+            protocol_name: Cow::Borrowed(b"/btt/1.0.0"),
         }
     }
 }
@@ -89,5 +89,105 @@ where
     fn upgrade_outbound(self, socket: Negotiated<C>, info: Self::Info) -> Self::Future {
         let mut codec = PeerWireCodec::default();
         future::ok(Framed::new(socket, codec).from_err())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bitfield::BitField;
+    use crate::piece::Piece;
+    use crate::proto::message::{Handshake, PeerRequest};
+    use crate::util::ShaHash;
+    use futures::{Future, Sink, Stream};
+    use libp2p_core::{PeerId, PublicKey, Transport};
+    use libp2p_tcp::TcpConfig;
+    use std::sync::mpsc;
+    use std::thread;
+    use tokio::runtime::Runtime;
+
+    /// We open a server and a client, send a message between the two, and check
+    /// that they were successfully received.
+    #[test]
+    fn correct_transfer() {
+        test_one(PeerMessage::Handshake {
+            handshake: Handshake::new_with_random_id(ShaHash::random()),
+        });
+
+        test_one(PeerMessage::KeepAlive);
+        test_one(PeerMessage::Choke);
+        test_one(PeerMessage::UnChoke);
+        test_one(PeerMessage::Interested);
+        test_one(PeerMessage::NotInterested);
+        test_one(PeerMessage::Have { index: 100 });
+        test_one(PeerMessage::Bitfield {
+            index_field: BitField::from_bytes(&[0b10100000, 0b00010010]),
+        });
+        test_one(PeerMessage::Request {
+            request: PeerRequest {
+                index: 1,
+                begin: 2,
+                length: 16384,
+            },
+        });
+        test_one(PeerMessage::Piece {
+            piece: Piece {
+                index: 1,
+                begin: 2,
+                block: std::iter::repeat(1).take(16384).collect(),
+            },
+        });
+        test_one(PeerMessage::Cancel {
+            request: PeerRequest {
+                index: 1,
+                begin: 2,
+                length: 16384,
+            },
+        });
+        test_one(PeerMessage::Port { port: 8080 });
+
+        fn test_one(msg_server: PeerMessage) {
+            let msg_client = msg_server.clone();
+            let (tx, rx) = mpsc::channel();
+
+            let bg_thread = thread::spawn(move || {
+                let transport = TcpConfig::new().with_upgrade(BittorrentProtocolConfig::default());
+
+                let addr: Multiaddr = "/ip4/127.0.0.1/tcp/20500".parse().unwrap();
+
+                let listener = transport.listen_on(addr.clone()).unwrap();
+
+                tx.send(addr).unwrap();
+
+                let future = listener
+                    .into_future()
+                    .and_then(|(_, listener)| {
+                        // skip the `NewAddress` msg
+                        listener.into_future()
+                    })
+                    .map_err(|(err, _)| err)
+                    .and_then(|(client, _)| client.unwrap().into_upgrade().unwrap().0)
+                    .map_err(|_| ())
+                    .and_then(|proto| proto.into_future().map_err(|_| ()))
+                    .map(move |(recv_msg, _)| {
+                        assert_eq!(recv_msg.unwrap(), msg_server);
+                        ()
+                    });
+                let mut rt = Runtime::new().unwrap();
+                let _ = rt.block_on(future).unwrap();
+            });
+
+            let transport = TcpConfig::new().with_upgrade(BittorrentProtocolConfig::default());
+
+            let future = transport
+                .dial(rx.recv().unwrap())
+                .unwrap()
+                .map_err(|err| ())
+                .and_then(|proto| proto.send(msg_client).map_err(|_| ()))
+                .map(|_| ());
+            let mut rt = Runtime::new().unwrap();
+            let _ = rt.block_on(future).unwrap();
+            bg_thread.join().unwrap();
+        }
     }
 }
