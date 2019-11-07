@@ -173,9 +173,11 @@ impl Encoder for PeerWireCodec {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::util::ShaHash;
     use libp2p_core::PeerId;
+
+    use crate::util::ShaHash;
+
+    use super::*;
 
     macro_rules! peer_wire_msg_ende {
         ($( $msg:expr ),*) => {
@@ -207,7 +209,7 @@ mod tests {
                 index_field: BitField::from_bytes(&[0b10100000, 0b00010010])
             },
             PeerMessage::Request {
-                peer_request: PeerRequest {
+                request: PeerRequest {
                     index: 1,
                     begin: 2,
                     length: 16384
@@ -221,7 +223,7 @@ mod tests {
                 }
             },
             PeerMessage::Cancel {
-                peer_request: PeerRequest {
+                request: PeerRequest {
                     index: 1,
                     begin: 2,
                     length: 16384
