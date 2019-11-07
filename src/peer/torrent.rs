@@ -12,6 +12,7 @@ use crate::behavior::{BittorrentConfig, SeedLeechConfig};
 use crate::bitfield::BitField;
 use crate::disk::block::{Block, BlockMetadata, BlockMut};
 use crate::disk::error::TorrentError;
+use crate::peer::piece::TorrentPieceHandler;
 use crate::peer::BttPeer;
 use crate::piece::PieceSelection;
 use crate::proto::message::Handshake;
@@ -44,7 +45,7 @@ pub enum TorrentPoolState<'a, TInner> {
     /// At least one torrent is waiting to generate requests.
     Waiting(&'a mut Torrent<TInner>),
     /// A block is ready to process
-    BlockReady(TorrentId, BlockBuffer),
+    BlockReady(TorrentId, Block),
     /// A torrent has finished.
     Finished(Torrent<TInner>),
     /// the peer we need to send a new KeepAlive msg
@@ -167,13 +168,11 @@ impl<TInner> TorrentPool<TInner> {
 pub struct Torrent<TInner> {
     /// The unique ID of the Torrent.
     id: TorrentId,
-    /// the downloaded blocks for a torrent
-    block_buffer: BlockBuffer,
     /// the info hash of the torrent file, this is how torrents are identified
     pub info_hash: ShaHash,
     /// The peer iterator that drives the torrent's piece state.
     // TODO this should be piece handler
-    peer_iter: TorrentPeerIter,
+    peer_iter: TorrentPieceHandler,
     /// The instant when the torrent started (i.e. began waiting for the first
     /// result from a peer).
     started: Instant,
@@ -184,6 +183,7 @@ pub struct Torrent<TInner> {
 }
 
 impl<TInner> Torrent<TInner> {
+    /// Gets the unique ID of the torrent.
     pub fn id(&self) -> TorrentId {
         self.id
     }
@@ -201,26 +201,6 @@ impl<TInner> Torrent<TInner> {
     }
 }
 
-/// tracks the state of a single torrent with all their remotes
-pub struct TorrentPeerIter {
-    /// how the next piece is selected
-    strategy: PieceSelection,
-    /// which pieces the client owns and lacks
-    have: BitField,
-    /// The ownership state of peers.
-    // TODO only peer-id is necessary to identify the peer
-    peers: FnvHashMap<PeerId, BttPeer>,
-    /// whether client is in endgame mode
-    endgame: bool,
-}
-
-impl TorrentPeerIter {
-    /// Advances the state of the torrent's pieces.
-    pub fn poll(&mut self, now: Instant) {
-        unimplemented!()
-    }
-}
-
 /// Unique identifier for an active Torrent operation.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct TorrentId(pub usize);
@@ -231,53 +211,4 @@ pub struct TorrentPeer {
     pub peer_id: PeerId,
     /// the bittorrent id, necessary to for handshaking
     pub torrent_id: TorrentId,
-}
-
-pub struct BlockBuffer {
-    /// torrent this belongs to
-    pub torrent_id: TorrentId,
-    /// the index of the piece this block buffers
-    pub piece_index: u64,
-    /// all the data, not necessarily in correct order
-    blocks: Vec<BlockMut>,
-    /// whether all blocks consecutively
-    aligned: bool,
-    /// the length of the piece all blocks belong to
-    piece_length: usize,
-}
-
-impl BlockBuffer {
-    #[inline]
-    pub fn is_aligned(&self) -> bool {
-        self.aligned
-    }
-
-    pub fn align(&mut self) -> bool {
-        if self.aligned {
-            true
-        } else {
-            // TODO order the blocks by offset
-            false
-        }
-    }
-
-    #[inline]
-    pub fn is_full_piece(&self) -> bool {
-        // if we own all pieces in that block
-        unimplemented!()
-    }
-}
-
-impl TryInto<Block> for BlockBuffer {
-    type Error = TorrentError;
-
-    fn try_into(mut self) -> Result<Block, Self::Error> {
-        if self.align() {
-            panic!("Not yet implemented")
-        } else {
-            Err(TorrentError::BadPiece {
-                index: self.piece_index,
-            })
-        }
-    }
 }

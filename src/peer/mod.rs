@@ -5,6 +5,7 @@ use crate::bitfield::BitField;
 use crate::util::ShaHash;
 
 pub mod piece;
+pub mod torrent;
 
 /// Status of our connection to a node reported by the BitTorrent protocol.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -41,17 +42,19 @@ impl Default for InterestType {
 /// connection start out as chocked and not interested
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BttPeer {
-    /// the peer's bittorrent id
+    //    /// Identifier of the peer.
+    //    pub node_id: PeerId,
+    /// The peer's bittorrent id
     pub peer_id: ShaHash,
-    /// what pieces this peers owns or lacks
+    /// What pieces this peers owns or lacks
     pub piece_field: Option<BitField>,
-    /// history of send/receive statistics
+    /// History of send/receive statistics
     pub stats: PeerStats,
     /// How the remote treats requests made by the client.
     pub choke_ty: ChokeType,
-    /// whether the remote is interested in the content
+    /// Whether the remote is interested in the content
     pub interest_ty: InterestType,
-    /// timestamp for the last keepalive msg
+    /// Timestamp for the last keepalive msg
     pub keep_alive: Instant,
 }
 
@@ -66,6 +69,16 @@ impl BttPeer {
             keep_alive: Instant::now(),
         }
     }
+
+    /// The peer currently choked the client
+    pub fn is_choked(&self) -> bool {
+        self.choke_ty == ChokeType::Choked
+    }
+
+    /// The peer currently has the client unchoked
+    pub fn is_unchoked(&self) -> bool {
+        self.choke_ty == ChokeType::UnChoked
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -75,11 +88,28 @@ pub struct PeerStats {
     pub send_blocks: usize,
 }
 
-/// peer's IP address either IPv6 (hexed) or IPv4 (dotted quad) or DNS name
-/// (string)
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PeerIp {
-    Ip4,
-    Ip6,
-    DNS(String),
+/// The state of a single `Peer`.
+#[derive(Debug, Copy, Clone)]
+enum PeerState {
+    /// The peer has not yet been contacted.
+    ///
+    /// This is the starting state for every peer.
+    NotContacted,
+    /// The iterator is waiting for a result from the peer.
+    Waiting(Instant),
+
+    /// A result was not delivered for the peer within the configured timeout.
+    ///
+    /// The peer is not taken into account for the termination conditions
+    /// of the iterator until and unless it responds.
+    Unresponsive,
+
+    /// Obtaining a result from the peer has failed.
+    ///
+    /// This is a final state, reached as a result of a call to `on_failure`.
+    Failed,
+    /// A successful result from the peer has been delivered.
+    ///
+    /// This is a final state, reached as a result of a call to `on_success`.
+    Succeeded,
 }

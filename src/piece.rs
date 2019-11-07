@@ -27,15 +27,15 @@ pub enum PieceOwnerShip {
 #[derive(Copy, Debug, Clone, Eq, PartialEq)]
 pub enum PieceSelection {
     /// select a random piece
-    RandomFirst,
+    Random,
     /// Once peers finish downloading the current piece, it will select the next
     /// piece which is the fewest among its neighbors
-    RarestFirst,
+    Rarest,
 }
 
 impl Default for PieceSelection {
     fn default() -> Self {
-        PieceSelection::RandomFirst
+        PieceSelection::Random
     }
 }
 
