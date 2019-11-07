@@ -41,6 +41,7 @@ impl Decoder for PeerWireCodec {
         if src[0] == PeerMessage::HANDSHAKE_ID {
             // handshake
             if src.len() < 68 {
+                src.reserve(68 - src.len());
                 return Ok(None);
             }
             if &src[1..20] != Handshake::BITTORRENT_IDENTIFIER {
@@ -87,6 +88,7 @@ impl Decoder for PeerWireCodec {
                 }
                 5 => {
                     if src.len() < 9 {
+                        src.reserve(9 - src.len());
                         return Ok(None);
                     }
                     if src[4] == PeerMessage::HAVE_ID {
@@ -104,6 +106,7 @@ impl Decoder for PeerWireCodec {
                 length => {
                     let msg_length = 4 + length as usize;
                     if src.len() < msg_length {
+                        src.reserve(msg_length - src.len());
                         return Ok(None);
                     }
 
