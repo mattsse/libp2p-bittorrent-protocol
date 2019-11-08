@@ -5,14 +5,11 @@ use crate::peer::BttPeer;
 use crate::piece::PieceSelection;
 use fnv::FnvHashMap;
 use libp2p_core::PeerId;
-use rand::{
-    self,
-    distributions::{Distribution, Uniform},
-};
+use rand::{self, seq::SliceRandom, Rng};
 use std::collections::{BTreeMap, HashMap};
 use wasm_timer::Instant;
 
-/// tracks the state of a single torrent with all their remotes
+/// Tracks the state of a single torrent with all their remotes
 pub struct TorrentPieceHandler {
     /// How the next piece is selected
     selection_strategy: PieceSelection,
@@ -72,14 +69,54 @@ impl TorrentPieceHandler {
         if missing.is_empty() {
             return Err(());
         }
-        let mut rng = rand::thread_rng();
-        let die = Uniform::from(0..missing.len());
-        let next = die.sample(&mut rng);
-        Ok(missing[next])
+        let index: usize = rand::thread_rng().gen_range(0, missing.len());
+        Ok(missing[index])
     }
 
-    /// Selects the next piece based on how many peers own a piece
-    fn next_rarest_piece(&self) -> Result<usize, ()> {
+    /// Selects a randomized rare piece.
+    fn next_least_common_piece(&self) -> Result<usize, ()> {
+        let mut missing = self.missing_piece_indices();
+        let peer_iter = self
+            .peers
+            .values()
+            .filter(|x| x.piece_field.is_some() && x.is_unchoked());
+
+        let mut peer_ctn = peer_iter.clone().count();
+        if peer_ctn == 0 {
+            // no peers that have the client unchoked with bitfields available
+            return Err(());
+        }
+
+        // need to randomize otherwise a peer might get bloated with requests for same
+        // piece
+        let mut rnd = rand::thread_rng();
+        missing.shuffle(&mut rnd);
+
+        let mut rarest = 0;
+        for piece in missing {
+            let mut piece_occurrences = 0;
+            for peer in peer_iter.clone() {
+                if let Some(field) = &peer.piece_field {
+                    if let Some(bit) = field.get(piece) {
+                        // the peer owns the piece
+                        piece_occurrences += 1;
+                    }
+                }
+            }
+            if piece_occurrences == 1 {
+                // can't get rarer than a single peer
+                return Ok(piece);
+            }
+            if piece_occurrences > rarest {
+                rarest = piece_occurrences;
+            }
+        }
+
+        Ok(rarest)
+    }
+
+    /// Selects the next most common piece
+    fn next_most_common_piece(&self) -> Result<usize, ()> {
         let missing = self.missing_piece_indices();
         if missing.is_empty() {
             return Err(());
@@ -94,7 +131,7 @@ impl TorrentPieceHandler {
             // no peers that have the client unchoked with bitfields available
             return Err(());
         }
-        let mut rarest = 0;
+        let mut most_common = 0;
         for piece in missing {
             let mut piece_occurrences = 0;
             for peer in peer_iter.clone() {
@@ -109,39 +146,39 @@ impl TorrentPieceHandler {
                 // finished, all peers own the piece
                 return Ok(piece);
             }
-            if piece_occurrences > rarest {
-                rarest = piece_occurrences;
+            if piece_occurrences > most_common {
+                most_common = piece_occurrences;
             }
         }
 
-        Ok(rarest)
+        Ok(most_common)
     }
 
     /// Compute the next piece to leech
     fn next_piece(&mut self) -> Result<usize, ()> {
         match self.selection_strategy {
             PieceSelection::Random => self.next_random_piece(),
-            PieceSelection::Rarest => self.next_rarest_piece(),
+            PieceSelection::Rarest => self.next_least_common_piece(),
         }
     }
 }
 
 /// Stores state for the piece to leech.
 pub struct PieceState {
-    /// The piece currently tracked
+    /// The piece currently tracked.
     current_piece: usize,
-    /// All the blocks that are still missing
+    /// All the blocks that are still missing.
     pending_blocks: HashMap<usize, Vec<BlockMetadata>>,
-    /// Amount of blocks the piece has
+    /// Amount of blocks the piece has.
     total_blocks: usize,
     /// The size of the last block in the piece that might be truncated.
     last_block_size: usize,
 }
 
 pub struct PieceBuffer {
-    /// all the data, not necessarily in correct order
+    /// All the data, not necessarily in correct order
     blocks: Vec<BlockMut>,
-    /// the length of the piece all blocks belong to
+    /// The length of the piece all blocks belong to
     piece_length: usize,
     /// The amount of blocks in the Piece
     total_blocks: usize,
