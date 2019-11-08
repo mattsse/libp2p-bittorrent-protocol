@@ -4,11 +4,12 @@ use crate::disk::error::TorrentError;
 use crate::peer::torrent::TorrentId;
 use crate::peer::BttPeer;
 use crate::piece::PieceSelection;
+use bytes::{BufMut, BytesMut};
 use fnv::FnvHashMap;
 use futures::Async;
 use libp2p_core::PeerId;
 use rand::{self, seq::SliceRandom, Rng};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use wasm_timer::Instant;
 
 /// Tracks the progress of the handler
@@ -242,11 +243,11 @@ impl TorrentPieceHandler {
 
 pub struct PieceBuffer {
     /// All the blocks that are still missing.
-    pending_blocks: Vec<BlockMetadata>,
+    pending_blocks: HashSet<BlockMetadata>,
     /// The piece currently tracked.
     current_piece: u64,
-    /// All the data, not necessarily in correct order
-    blocks: BTreeMap<usize, Vec<BlockMut>>,
+    /// All the single blocks sorted by offset
+    blocks: BTreeMap<u64, Block>,
     /// The length of the piece all blocks belong to
     piece_length: u64,
     /// The amount of blocks in the Piece
@@ -256,6 +257,7 @@ pub struct PieceBuffer {
 }
 
 impl PieceBuffer {
+    /// 2^14 16kb per block
     const BLOCK_SIZE: u64 = 16384;
 
     /// Whether all the buffer owns the right amount of blocks
@@ -264,10 +266,37 @@ impl PieceBuffer {
         self.blocks.len() == self.total_blocks as usize
     }
 
-    pub fn finalize_piece(self) -> Result<Block, TorrentError> {
-        unimplemented!()
+    /// Adds the block in the buffer.
+    /// If the `block`s metadata could not be validated, the block is returned
+    pub fn add_block(&mut self, block: Block) -> Option<Block> {
+        if self.pending_blocks.remove(&block.metadata()) {
+            self.blocks.insert(block.metadata().block_offset, block);
+            None
+        } else {
+            Some(block)
+        }
     }
 
+    /// Turn the buffer into a single block
+    pub fn finalize_piece(self) -> Result<Block, TorrentError> {
+        let mut buffer = BytesMut::with_capacity(self.piece_length as usize);
+        for block in self.blocks.values() {
+            if block.is_correct_len() {
+                buffer.put_slice(block);
+            } else {
+                return Err(TorrentError::BadPiece {
+                    index: self.current_piece,
+                });
+            }
+        }
+
+        Ok(Block::new(
+            BlockMetadata::new(self.current_piece, 0, self.piece_length as usize),
+            buffer.freeze(),
+        ))
+    }
+
+    /// Create a new buffer with the `NextPiece` message.
     fn new_with_piece(
         current_piece: u64,
         piece_length: u64,
@@ -300,7 +329,7 @@ impl PieceBuffer {
         }
 
         let buffer = PieceBuffer {
-            pending_blocks: blocks.clone(),
+            pending_blocks: blocks.clone().into_iter().collect(),
             current_piece,
             blocks: Default::default(),
             piece_length: 0,

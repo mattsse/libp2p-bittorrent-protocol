@@ -69,6 +69,10 @@ impl Block {
     pub fn into_parts(self) -> (BlockMetadata, Bytes) {
         (self.metadata, self.block_data)
     }
+
+    pub fn is_correct_len(&self) -> bool {
+        self.block_data.len() == self.metadata.block_length
+    }
 }
 
 impl From<BlockMut> for Block {
