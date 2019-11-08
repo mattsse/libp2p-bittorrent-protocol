@@ -1,16 +1,18 @@
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+use bytes::{BufMut, BytesMut};
+use fnv::FnvHashMap;
+use futures::Async;
+use libp2p_core::PeerId;
+use rand::{self, seq::SliceRandom, Rng};
+use wasm_timer::Instant;
+
 use crate::bitfield::BitField;
 use crate::disk::block::{Block, BlockMetadata, BlockMut};
 use crate::disk::error::TorrentError;
 use crate::peer::torrent::TorrentId;
 use crate::peer::BttPeer;
 use crate::piece::PieceSelection;
-use bytes::{BufMut, BytesMut};
-use fnv::FnvHashMap;
-use futures::Async;
-use libp2p_core::PeerId;
-use rand::{self, seq::SliceRandom, Rng};
-use std::collections::{BTreeMap, HashMap, HashSet};
-use wasm_timer::Instant;
 
 /// Tracks the progress of the handler
 pub enum TorrentPieceHandlerState {

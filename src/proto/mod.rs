@@ -94,17 +94,20 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::mpsc;
+    use std::thread;
+
+    use futures::{Future, Sink, Stream};
+    use libp2p_core::{PeerId, PublicKey, Transport};
+    use libp2p_tcp::TcpConfig;
+    use tokio::runtime::Runtime;
+
     use crate::bitfield::BitField;
     use crate::piece::Piece;
     use crate::proto::message::{Handshake, PeerRequest};
     use crate::util::ShaHash;
-    use futures::{Future, Sink, Stream};
-    use libp2p_core::{PeerId, PublicKey, Transport};
-    use libp2p_tcp::TcpConfig;
-    use std::sync::mpsc;
-    use std::thread;
-    use tokio::runtime::Runtime;
+
+    use super::*;
 
     /// We open a server and a client, send a message between the two, and check
     /// that they were successfully received.
