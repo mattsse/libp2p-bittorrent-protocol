@@ -70,6 +70,20 @@ impl BttPeer {
         }
     }
 
+    /// Whether the Peer already sent its bitfield
+    pub fn has_bitfield(&self) -> bool {
+        self.piece_field.is_some()
+    }
+
+    /// Whether the piece is owned by the peer
+    pub fn has_piece(&self, piece_index: usize) -> Option<bool> {
+        if let Some(field) = &self.piece_field {
+            field.get(piece_index)
+        } else {
+            None
+        }
+    }
+
     /// The peer currently choked the client
     pub fn is_choked(&self) -> bool {
         self.choke_ty == ChokeType::Choked
@@ -78,6 +92,45 @@ impl BttPeer {
     /// The peer currently has the client unchoked
     pub fn is_unchoked(&self) -> bool {
         self.choke_ty == ChokeType::UnChoked
+    }
+
+    /// Set the piece at the index to owned.
+    /// If no bitfield is available `None` is returned, otherwise a `Ok` if the
+    /// requested `piece_index` is in bounds.
+    pub fn add_piece(&mut self, piece_index: usize) -> Option<Result<(), ()>> {
+        if let Some(have) = &mut self.piece_field {
+            if piece_index < have.len() {
+                have.set(piece_index, true);
+                Some(Ok(()))
+            } else {
+                Some(Err(()))
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Sets the Peer's bitfield and returns if there was already one set.
+    pub fn set_bitfield(&mut self, bitfield: BitField) -> Option<BitField> {
+        let field = self.piece_field.take();
+        self.piece_field = Some(bitfield);
+        field
+    }
+
+    /// Set the piece at the index to missing.
+    /// If no bitfield is available `None` is returned, otherwise a `Ok` if the
+    /// requested `piece_index` is in bounds.
+    pub fn remove_piece(&mut self, piece_index: usize) -> Option<Result<(), ()>> {
+        if let Some(have) = &mut self.piece_field {
+            if piece_index < have.len() {
+                have.set(piece_index, false);
+                Some(Ok(()))
+            } else {
+                Some(Err(()))
+            }
+        } else {
+            None
+        }
     }
 }
 
