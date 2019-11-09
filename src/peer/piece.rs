@@ -11,7 +11,7 @@ use crate::bitfield::BitField;
 use crate::disk::block::{Block, BlockMetadata, BlockMut};
 use crate::disk::error::TorrentError;
 use crate::peer::torrent::TorrentId;
-use crate::peer::BttPeer;
+use crate::peer::{BttPeer, ChokeType, InterestType};
 use crate::piece::PieceSelection;
 
 /// Tracks the progress of the handler
@@ -47,11 +47,7 @@ impl TorrentPieceHandler {
     /// Add a new peer for the torrent.
     pub fn insert_peer(&mut self, id: PeerId, peer: BttPeer) -> Option<BttPeer> {
         if let Some(buffer) = &mut self.piece_buffer {
-            if peer.is_unchoked()
-                && peer
-                    .has_piece(buffer.piece_index as usize)
-                    .unwrap_or_default()
-            {
+            if peer.remote_can_seed_piece(buffer.piece_index as usize) {
                 // consider adding to the current buffer
                 if !self.peers.contains_key(&id) {
                     buffer.peers.push(id.clone());
@@ -64,6 +60,69 @@ impl TorrentPieceHandler {
 
     pub fn bitfield(&self) -> &BitField {
         &self.have
+    }
+
+    pub fn set_client_choke_for_peer(
+        &mut self,
+        peer_id: &PeerId,
+        choke: ChokeType,
+    ) -> Option<ChokeType> {
+        if let Some(peer) = self.peers.get_mut(peer_id) {
+            Some(std::mem::replace(&mut peer.client_choke, choke))
+        } else {
+            None
+        }
+    }
+
+    pub fn set_client_interest_for_peer(
+        &mut self,
+        peer_id: &PeerId,
+        interest: InterestType,
+    ) -> Option<InterestType> {
+        if let Some(peer) = self.peers.get_mut(peer_id) {
+            Some(std::mem::replace(&mut peer.client_interest, interest))
+        } else {
+            None
+        }
+    }
+
+    pub fn set_choke_on_remote(&mut self, peer_id: &PeerId, choke: ChokeType) -> Option<ChokeType> {
+        if let Some(peer) = self.peers.get_mut(peer_id) {
+            let old = Some(std::mem::replace(&mut peer.remote_choke, choke));
+            if let Some(buffer) = &mut self.piece_buffer {
+                match &choke {
+                    ChokeType::Choked => {
+                        buffer.remove_peer(peer_id);
+                    }
+                    ChokeType::UnChoked => {
+                        if peer.remote_can_seed_piece(buffer.piece_index as usize) {
+                            buffer.peers.push(peer_id.clone());
+                        }
+                    }
+                }
+            }
+            old
+        } else {
+            None
+        }
+    }
+
+    pub fn set_interest_on_remote(
+        &mut self,
+        peer_id: &PeerId,
+        interest: InterestType,
+    ) -> Option<InterestType> {
+        if let Some(peer) = self.peers.get_mut(peer_id) {
+            let old = Some(std::mem::replace(&mut peer.remote_interest, interest));
+            old
+        } else {
+            None
+        }
+    }
+
+    /// Whether the piece was already downloaded
+    pub fn has_piece(&self, piece_index: usize) -> bool {
+        self.have.get(piece_index).unwrap_or_default()
     }
 
     pub fn remove_peer(&mut self, id: &PeerId) -> Option<BttPeer> {
@@ -118,11 +177,7 @@ impl TorrentPieceHandler {
         }
     }
 
-    pub fn add_peer_piece(
-        &mut self,
-        peer_id: &PeerId,
-        piece_index: usize,
-    ) -> Option<Result<(), ()>> {
+    pub fn add_peer_piece(&mut self, peer_id: &PeerId, piece_index: usize) -> Option<bool> {
         if let Some(peer) = self.peers.get_mut(peer_id) {
             if peer.has_bitfield() {
                 peer.add_piece(piece_index)
@@ -132,9 +187,9 @@ impl TorrentPieceHandler {
                     field.clear();
                     field.set(piece_index, true);
                     peer.set_bitfield(field);
-                    Some(Ok(()))
+                    Some(true)
                 } else {
-                    Some(Err(()))
+                    Some(false)
                 }
             }
         } else {
@@ -184,9 +239,8 @@ impl TorrentPieceHandler {
             let peers: Option<Vec<_>> = self
                 .peers
                 .iter()
-                .filter(|(_, peer)| peer.is_unchoked())
                 .map(|(id, peer)| {
-                    if peer.has_piece(piece).unwrap_or_default() {
+                    if peer.remote_can_seed_piece(piece) {
                         Some(id.clone())
                     } else {
                         None
@@ -210,12 +264,8 @@ impl TorrentPieceHandler {
     fn next_least_common_piece(&self) -> Option<PieceBuffer> {
         let mut missing = self.missing_piece_indices();
 
-        if self
-            .peers
-            .values()
-            .all(|x| !x.has_bitfield() || x.is_choked())
-        {
-            // no peers that have the client unchoked with bitfields available
+        if !self.peers.values().any(BttPeer::remote_can_seed) {
+            // no peers have the client unchoked with bitfields available
             return None;
         }
 
@@ -230,9 +280,8 @@ impl TorrentPieceHandler {
             let peers: Option<Vec<_>> = self
                 .peers
                 .iter()
-                .filter(|(_, peer)| peer.is_unchoked())
                 .map(|(id, peer)| {
-                    if peer.has_piece(piece).unwrap_or_default() {
+                    if peer.remote_can_seed_piece(piece) {
                         Some(id)
                     } else {
                         None

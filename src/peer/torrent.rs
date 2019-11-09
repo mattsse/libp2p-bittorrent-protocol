@@ -9,15 +9,17 @@ use libp2p_core::PeerId;
 use wasm_timer::Instant;
 
 use crate::behavior::{
-    BittorrentConfig, HandshakeError, HandshakeOk, HandshakeResult, SeedLeechConfig,
+    BittorrentConfig, HandshakeError, HandshakeOk, HandshakeResult, InterestOk, InterestResult,
+    KeepAliveOk, KeepAliveResult, PeerError, SeedLeechConfig,
 };
 use crate::bitfield::BitField;
 use crate::disk::block::{Block, BlockMetadata, BlockMut};
 use crate::disk::error::TorrentError;
+use crate::disk::message::DiskMessageIn;
 use crate::peer::piece::TorrentPieceHandler;
-use crate::peer::BttPeer;
+use crate::peer::{BttPeer, ChokeType, InterestType};
 use crate::piece::PieceSelection;
-use crate::proto::message::Handshake;
+use crate::proto::message::{Handshake, PeerRequest};
 use crate::util::ShaHash;
 
 /// A `TorrentPool` provides an aggregate state machine for driving the
@@ -150,18 +152,63 @@ impl<TInner> TorrentPool<TInner> {
         Err(HandshakeError::InvalidPeer(peer_id, Some(torrent_id)))
     }
 
-    pub fn on_keep_alive(&mut self, peer_id: &PeerId, instant: Instant) {}
+    /// Update the peer's latest heartbeat timestamp.
+    pub fn on_keep_alive_by_remote(
+        &mut self,
+        peer_id: PeerId,
+        new_heartbeat: Instant,
+    ) -> KeepAliveResult {
+        for torrent in self.torrents.values_mut() {
+            if let Some(old_heartbeat) = torrent.on_keep_alive_by_remote(&peer_id, &new_heartbeat) {
+                return Ok(KeepAliveOk::Remote {
+                    torrent_id: torrent.id(),
+                    peer_id,
+                    old_heartbeat,
+                    new_heartbeat,
+                });
+            }
+        }
+        Err(PeerError::NotFound(peer_id))
+    }
 
-    pub fn on_choked(&mut self, peer_id: &PeerId) {}
+    pub fn on_interest_by_remote(
+        &mut self,
+        peer_id: PeerId,
+        interest: InterestType,
+    ) -> InterestResult {
+        for torrent in self.torrents.values_mut() {
+            if let Some(interest) = match &interest {
+                InterestType::NotInterested => torrent.on_remote_not_interested(&peer_id),
+                InterestType::Interested => torrent.on_remote_interested(&peer_id),
+            } {
+                return match interest {
+                    InterestType::Interested => Ok(InterestOk::Interested(peer_id)),
+                    InterestType::NotInterested => Ok(InterestOk::NotInterested(peer_id)),
+                };
+            }
+        }
+        Err(PeerError::NotFound(peer_id))
+    }
 
-    pub fn on_unchoked(&mut self, peer_id: &PeerId) {}
+    pub fn on_piece_request(
+        &self,
+        peer_id: &PeerId,
+        request: PeerRequest,
+    ) -> Option<DiskMessageIn> {
+        for torrent in self.torrents.values() {
+            if torrent.can_seed_piece_to(peer_id, request.index as usize) {
+                return Some(DiskMessageIn::ReadBlock(torrent.id, request.into()));
+            }
+        }
+        None
+    }
 
     pub fn on_have(&mut self, peer_id: &PeerId, piece_index: u64) {}
 
     /// Set the `Bitfield` for the peer associated with the torrent
     ///
     /// Returns `true` if the associated peer was found, `false` otherwise
-    pub fn set_bitfield(
+    pub fn set_peer_bitfield(
         &mut self,
         peer_id: &PeerId,
         torrent_id: TorrentId,
@@ -329,6 +376,93 @@ impl<TInner> Torrent<TInner> {
         unimplemented!()
     }
 
+    /// Update the peer's latest heartbeat timestamp.
+    pub fn on_keep_alive_by_remote(
+        &mut self,
+        peer_id: &PeerId,
+        heartbeat: &Instant,
+    ) -> Option<Instant> {
+        if let Some(peer) = self.peer_iter.get_peer_mut(peer_id) {
+            Some(std::mem::replace(
+                &mut peer.remote_heartbeat,
+                heartbeat.to_owned(),
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Update the client's latest heartbeat timestamp.
+    pub fn on_keep_alive_by_client(
+        &mut self,
+        peer_id: &PeerId,
+        heartbeat: &Instant,
+    ) -> Option<Instant> {
+        if let Some(peer) = self.peer_iter.get_peer_mut(peer_id) {
+            Some(std::mem::replace(
+                &mut peer.client_heartbeat,
+                heartbeat.to_owned(),
+            ))
+        } else {
+            None
+        }
+    }
+
+    pub fn on_choked_by_remote(&mut self, peer_id: &PeerId) -> Option<ChokeType> {
+        self.peer_iter
+            .set_choke_on_remote(peer_id, ChokeType::Choked)
+    }
+
+    pub fn on_unchoked_by_remote(&mut self, peer_id: &PeerId) -> Option<ChokeType> {
+        self.peer_iter
+            .set_choke_on_remote(peer_id, ChokeType::UnChoked)
+    }
+
+    pub fn on_remote_interested(&mut self, peer_id: &PeerId) -> Option<InterestType> {
+        self.peer_iter
+            .set_interest_on_remote(peer_id, InterestType::Interested)
+    }
+
+    pub fn on_remote_not_interested(&mut self, peer_id: &PeerId) -> Option<InterestType> {
+        self.peer_iter
+            .set_interest_on_remote(peer_id, InterestType::NotInterested)
+    }
+
+    pub fn on_remote_have(&mut self, peer_id: &PeerId, piece_index: usize) -> Option<bool> {
+        if let Some(peer) = self.peer_iter.get_peer_mut(peer_id) {
+            peer.add_piece(piece_index)
+        } else {
+            None
+        }
+    }
+
+    /// Whether the client can seed a piece the peer.
+    ///
+    /// Seeding a piece to the remote is possible, if the remote is interested
+    /// and not choked by the client. Also the client has to own the piece in
+    /// the first place.
+    pub fn can_seed_piece_to(&self, peer_id: &PeerId, piece_index: usize) -> bool {
+        if let Some(peer) = self.peer_iter.get_peer(peer_id) {
+            self.peer_iter.has_piece(piece_index) && peer.remote_can_leech()
+        } else {
+            false
+        }
+    }
+
+    /// Whether the remote can seed a specific piece.
+    ///
+    /// Leeching the piece from the remote is possible if the remote owns that
+    /// piece, the client is interested to download and currently not choked by
+    /// the remote.
+    pub fn can_leech_piece_from(&self, peer_id: &PeerId, piece_index: usize) -> bool {
+        if let Some(peer) = self.peer_iter.get_peer(peer_id) {
+            peer.remote_can_seed_piece(piece_index)
+        } else {
+            false
+        }
+    }
+
+    /// If the peer is currently tracked by this torrent.
     pub fn contains_peer(&self, peer_id: &PeerId) -> bool {
         self.peer_iter.peers.contains_key(peer_id)
     }

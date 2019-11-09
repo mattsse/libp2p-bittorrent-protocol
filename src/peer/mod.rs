@@ -51,11 +51,17 @@ pub struct BttPeer {
     /// History of send/receive statistics
     pub stats: PeerStats,
     /// How the remote treats requests made by the client.
-    pub choke_ty: ChokeType,
+    pub remote_choke: ChokeType,
     /// Whether the remote is interested in the content
-    pub interest_ty: InterestType,
-    /// Timestamp for the last keepalive msg
-    pub keep_alive: Instant,
+    pub remote_interest: InterestType,
+    /// How the client treats requests from the remote
+    pub client_choke: ChokeType,
+    /// Whether the client is currently interested to download
+    pub client_interest: InterestType,
+    /// Timestamp for the last received keepalive msg
+    pub remote_heartbeat: Instant,
+    /// Timestamp for the last sent keepalive msg
+    pub client_heartbeat: Instant,
 }
 
 impl BttPeer {
@@ -64,9 +70,12 @@ impl BttPeer {
             piece_field: None,
             peer_btt_id: peer_btt_id.into(),
             stats: Default::default(),
-            choke_ty: Default::default(),
-            interest_ty: Default::default(),
-            keep_alive: Instant::now(),
+            remote_choke: Default::default(),
+            remote_interest: Default::default(),
+            client_choke: Default::default(),
+            client_interest: Default::default(),
+            remote_heartbeat: Instant::now(),
+            client_heartbeat: Instant::now(),
         }
     }
 
@@ -75,9 +84,12 @@ impl BttPeer {
             piece_field: Some(piece_field),
             peer_btt_id: peer_btt_id.into(),
             stats: Default::default(),
-            choke_ty: Default::default(),
-            interest_ty: Default::default(),
-            keep_alive: Instant::now(),
+            remote_choke: Default::default(),
+            remote_interest: Default::default(),
+            client_choke: Default::default(),
+            client_interest: Default::default(),
+            remote_heartbeat: Instant::now(),
+            client_heartbeat: Instant::now(),
         }
     }
 
@@ -95,26 +107,76 @@ impl BttPeer {
         }
     }
 
-    /// The peer currently choked the client
-    pub fn is_choked(&self) -> bool {
-        self.choke_ty == ChokeType::Choked
+    /// The remote is interested to download
+    pub fn is_remote_interested(&self) -> bool {
+        self.remote_interest == InterestType::Interested
     }
 
-    /// The peer currently has the client unchoked
-    pub fn is_unchoked(&self) -> bool {
-        self.choke_ty == ChokeType::UnChoked
+    /// The remote is currently not interested to download
+    pub fn is_remote_not_interested(&self) -> bool {
+        self.remote_interest == InterestType::Interested
+    }
+
+    /// The client is currently choked by the remote
+    pub fn is_choked_on_remote(&self) -> bool {
+        self.remote_choke == ChokeType::Choked
+    }
+
+    /// The client is currently choked by the remote
+    pub fn is_unchoked_on_remote(&self) -> bool {
+        self.remote_choke == ChokeType::UnChoked
+    }
+
+    /// The client is interested to download
+    pub fn is_client_interested(&self) -> bool {
+        self.client_interest == InterestType::Interested
+    }
+
+    /// The client is currently not interested to download
+    pub fn is_client_not_interested(&self) -> bool {
+        self.client_interest == InterestType::Interested
+    }
+
+    /// The remote is currently choked by the client side
+    pub fn is_choked_on_client(&self) -> bool {
+        self.client_choke == ChokeType::Choked
+    }
+
+    /// The client is currently choked by the remote
+    pub fn is_unchoked_on_client(&self) -> bool {
+        self.client_choke == ChokeType::UnChoked
+    }
+
+    /// Whether or not requests sent by the client are answered by the remote
+    ///
+    /// A download only is possible if the client is interested and the is not
+    /// choked by the remote and the bitfield was sent to the client
+    pub fn remote_can_seed(&self) -> bool {
+        self.is_unchoked_on_remote() && self.is_client_interested() && self.has_bitfield()
+    }
+
+    /// Whether or not requests by the remote are answered by the client
+    ///
+    /// To send a piece to remote the remote must be interested and not be
+    /// choked by the client
+    pub fn remote_can_leech(&self) -> bool {
+        self.is_unchoked_on_client() && self.is_remote_interested()
+    }
+
+    pub fn remote_can_seed_piece(&self, piece_index: usize) -> bool {
+        self.remote_can_seed() && self.has_piece(piece_index).unwrap_or_default()
     }
 
     /// Set the piece at the index to owned.
-    /// If no bitfield is available `None` is returned, otherwise a `Ok` if the
+    /// If no bitfield is available `None` is returned, otherwise if the
     /// requested `piece_index` is in bounds.
-    pub fn add_piece(&mut self, piece_index: usize) -> Option<Result<(), ()>> {
+    pub fn add_piece(&mut self, piece_index: usize) -> Option<bool> {
         if let Some(have) = &mut self.piece_field {
             if piece_index < have.len() {
                 have.set(piece_index, true);
-                Some(Ok(()))
+                Some(true)
             } else {
-                Some(Err(()))
+                Some(false)
             }
         } else {
             None

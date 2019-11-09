@@ -303,27 +303,69 @@ where
                 request_id,
             } => {
                 // a peer requested the bitfield
+                if let Some(index_field) = self.torrents.get_bitfield(&peer_id) {
+                    self.queued_events
+                        .push_back(NetworkBehaviourAction::SendEvent {
+                            peer_id,
+                            event: BittorrentHandlerIn::BitfieldRes {
+                                index_field,
+                                request_id,
+                            },
+                        });
+                } else {
+                    // peer is not associated with any torrent in the pool
+                    self.queued_events
+                        .push_back(NetworkBehaviourAction::SendEvent {
+                            peer_id,
+                            event: BittorrentHandlerIn::Disconnect(None),
+                        });
+                }
             }
             BittorrentHandlerEvent::BitfieldRes {
                 index_field,
                 user_data,
             } => {
                 // we received a bitfield from a remote
-                if !self.torrents.set_bitfield(&peer_id, user_data, index_field) {
-                    // TODO drop connection
+                if !self
+                    .torrents
+                    .set_peer_bitfield(&peer_id, user_data, index_field)
+                {
+                    self.queued_events
+                        .push_back(NetworkBehaviourAction::SendEvent {
+                            peer_id,
+                            event: BittorrentHandlerIn::Disconnect(None),
+                        });
                 }
             }
-            BittorrentHandlerEvent::GetPieceReq { .. } => {
+            BittorrentHandlerEvent::GetPieceReq {
+                request,
+                request_id,
+            } => {
+                // remote wants a new block
                 // TODO check config for seeding
+
+                // validate that we can send a block first
             }
             BittorrentHandlerEvent::GetPieceRes { .. } => {}
             BittorrentHandlerEvent::CancelPiece { .. } => {}
             BittorrentHandlerEvent::Choke { .. } => {}
-            BittorrentHandlerEvent::Interest { .. } => {}
+            BittorrentHandlerEvent::Interest { inner } => {
+                self.queued_events
+                    .push_back(NetworkBehaviourAction::GenerateEvent(
+                        BittorrentEvent::InterestResult(
+                            self.torrents.on_interest_by_remote(peer_id, inner),
+                        ),
+                    ))
+            }
             BittorrentHandlerEvent::Have { .. } => {}
             BittorrentHandlerEvent::TorrentErr { .. } => {}
             BittorrentHandlerEvent::KeepAlive { timestamp } => {
-                self.update_keep_alive(&peer_id, timestamp)
+                self.queued_events
+                    .push_back(NetworkBehaviourAction::GenerateEvent(
+                        BittorrentEvent::KeepAliveResult(
+                            self.torrents.on_keep_alive_by_remote(peer_id, timestamp),
+                        ),
+                    ))
             }
         }
     }
@@ -414,7 +456,8 @@ pub enum BittorrentEvent {
     HandshakeResult(HandshakeResult),
     BlockResult(BlockResult),
     DiskResult(DiskResult),
-
+    KeepAliveResult(KeepAliveResult),
+    InterestResult(InterestResult),
     TorrentFinished { path: PathBuf },
     TorrentSubfileFinished { path: PathBuf },
     AddTorrentSeed { seed: TorrentSeed },
@@ -439,11 +482,37 @@ pub enum HandshakeError {
     Timeout(PeerId),
 }
 
+/// The result of a `KeepAlive`.
+pub type KeepAliveResult = Result<KeepAliveOk, PeerError>;
+
 #[derive(Debug, Clone)]
-pub enum InterestedPeerResult {
-    Interested,
-    NotInterested,
-    Timeout,
+pub enum KeepAliveOk {
+    Remote {
+        torrent_id: TorrentId,
+        peer_id: PeerId,
+        old_heartbeat: Instant,
+        new_heartbeat: Instant,
+    },
+    Client {
+        torrent_id: TorrentId,
+        peer_id: PeerId,
+        old_heartbeat: Instant,
+        new_heartbeat: Instant,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum PeerError {
+    NotFound(PeerId),
+}
+
+/// The result of a `KeepAlive`.
+pub type InterestResult = Result<InterestOk, PeerError>;
+
+#[derive(Debug, Clone)]
+pub enum InterestOk {
+    Interested(PeerId),
+    NotInterested(PeerId),
 }
 
 /// The error result of [`Kademlia::get_closest_peers`].
