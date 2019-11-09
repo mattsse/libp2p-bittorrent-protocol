@@ -46,7 +46,34 @@ pub struct TorrentPieceHandler {
 impl TorrentPieceHandler {
     /// Add a new peer for the torrent.
     pub fn insert_peer(&mut self, id: PeerId, peer: BttPeer) -> Option<BttPeer> {
-        self.peers.insert(id, peer)
+        if let Some(buffer) = &mut self.piece_buffer {
+            if peer.is_unchoked()
+                && peer
+                    .has_piece(buffer.piece_index as usize)
+                    .unwrap_or_default()
+            {
+                // consider adding to the current buffer
+                if !self.peers.contains_key(&id) {
+                    buffer.peers.push(id.clone());
+                }
+            }
+        }
+
+        self.peers.insert(id.clone(), peer)
+    }
+
+    pub fn bitfield(&self) -> &BitField {
+        &self.have
+    }
+
+    pub fn remove_peer(&mut self, id: &PeerId) -> Option<BttPeer> {
+        let peer = self.peers.remove(id);
+        if peer.is_some() {
+            if let Some(buffer) = &mut self.piece_buffer {
+                buffer.remove_peer(id);
+            }
+        }
+        peer
     }
 
     pub fn get_peer(&self, id: &PeerId) -> Option<&BttPeer> {
@@ -293,6 +320,19 @@ impl PieceBuffer {
             } else {
                 self.peers.push(peer);
             }
+        }
+        None
+    }
+
+    pub fn remove_peer(&mut self, id: &PeerId) -> Option<PeerId> {
+        let pos = self.peers.iter().position(|x| *x == *id);
+        if let Some(pos) = pos {
+            return Some(self.peers.remove(pos));
+        }
+        // check pending blocks
+        if let Some((peer, block)) = self.pending_blocks.remove_entry(id) {
+            self.missing_blocks.push(block);
+            return Some(peer);
         }
         None
     }
