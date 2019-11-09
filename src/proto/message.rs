@@ -76,6 +76,7 @@ impl PeerMessage {
     pub const KEEP_ALIVE_ID: [u8; 4] = [0, 0, 0, 0];
 
     /// length in bytes that should be reserved for serialising the message.
+    ///
     /// Besides `PeerMessage::Handshake` all messages are prefixed by its length
     /// (4 byte big endian). Besides `PeerMessage::KeepAlive` and
     /// `PeerMessage::Handshake` every message is identified by single decimal

@@ -202,21 +202,25 @@ impl Encoder for PeerWireCodec {
 
 #[cfg(test)]
 mod tests {
-    use libp2p_core::PeerId;
-
-    use crate::util::ShaHash;
-
     use super::*;
+    use crate::util::ShaHash;
+    use libp2p_core::PeerId;
 
     macro_rules! peer_wire_msg_ende {
         ($( $msg:expr ),*) => {
-            let mut codec = PeerWireCodec::default();
+            let mut len = 0;
             $(
-            {
-                let mut buf = BytesMut::with_capacity($msg.len());
-                codec.encode($msg.clone(), &mut buf).unwrap();
-                assert_eq!(Some($msg), codec.decode(&mut buf).unwrap());
-            }
+                len += $msg.len();
+            )*
+            let mut buf = BytesMut::with_capacity(len);
+            let mut codec = PeerWireCodec::default();
+
+            $(
+              codec.encode($msg.clone(), &mut buf).unwrap();
+            )*
+
+            $(
+              assert_eq!(Some($msg), codec.decode(&mut buf).unwrap());
             )*
         };
     }
