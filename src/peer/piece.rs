@@ -15,18 +15,18 @@ use crate::peer::BttPeer;
 use crate::piece::PieceSelection;
 
 /// Tracks the progress of the handler
+#[derive(Debug)]
 pub enum TorrentPieceHandlerState {
-    /// Wait that the state of a peer changes
-    Waiting,
-    /// Currently tracking the progress of a piece
-    PieceNotReady,
-    /// Start a new piece to leech
-    Ready(NextPiece),
-    /// A new piece is ready
+    /// Wait until the state of a peer changes.
+    WaitingPeers,
+    /// Start a new block to leech.
+    Ready(Option<NextBlock>),
+    /// A new piece is ready.
     Finished(Result<Block, TorrentError>),
 }
 
 /// Tracks the state of a single torrent with all their remotes
+#[derive(Debug)]
 pub struct TorrentPieceHandler {
     id: TorrentId,
     /// How the next piece is selected
@@ -44,6 +44,7 @@ pub struct TorrentPieceHandler {
 }
 
 impl TorrentPieceHandler {
+    /// Add a new peer for the torrent.
     pub fn insert_peer(&mut self, id: PeerId, peer: BttPeer) -> Option<BttPeer> {
         self.peers.insert(id, peer)
     }
@@ -64,20 +65,29 @@ impl TorrentPieceHandler {
     /// Returns the next piece to leech if the previous piece was finished and
     /// at least one peer has a missing piece.
     pub fn poll(&mut self) -> TorrentPieceHandlerState {
-        if let Some(buffer) = self.piece_buffer.take() {
+        if let Some(mut buffer) = self.piece_buffer.take() {
             if buffer.is_full_piece() {
-                return TorrentPieceHandlerState::Finished(buffer.finalize_piece());
+                let block = match buffer.try_finalize_piece() {
+                    Ok(block) => {
+                        self.add_piece(block.metadata().piece_index as usize);
+                        Ok(block)
+                    }
+                    Err(e) => Err(e),
+                };
+                return TorrentPieceHandlerState::Finished(block);
             } else {
+                let next_block = buffer.next();
                 self.piece_buffer = Some(buffer);
-                return TorrentPieceHandlerState::PieceNotReady;
+                return TorrentPieceHandlerState::Ready(next_block);
             }
         }
 
-        if let Some((buffer, piece)) = self.next_piece() {
+        if let Some(mut buffer) = self.next_piece_buffer() {
+            let next_block = buffer.next();
             self.piece_buffer = Some(buffer);
-            TorrentPieceHandlerState::Ready(piece)
+            TorrentPieceHandlerState::Ready(next_block)
         } else {
-            TorrentPieceHandlerState::Waiting
+            TorrentPieceHandlerState::WaitingPeers
         }
     }
 
@@ -138,7 +148,7 @@ impl TorrentPieceHandler {
     }
 
     /// Selects the the next piece randomly
-    fn next_random_piece(&self) -> Option<(PieceBuffer, NextPiece)> {
+    fn next_random_piece(&self) -> Option<PieceBuffer> {
         let mut missing = self.missing_piece_indices();
         let mut rnd = rand::thread_rng();
         missing.shuffle(&mut rnd);
@@ -158,7 +168,7 @@ impl TorrentPieceHandler {
                 .collect();
 
             if let Some(peers) = peers {
-                return Some(PieceBuffer::new_with_piece(
+                return Some(PieceBuffer::new(
                     piece as u64,
                     self.piece_length,
                     self.id,
@@ -170,7 +180,7 @@ impl TorrentPieceHandler {
     }
 
     /// Selects a randomized rare piece.
-    fn next_least_common_piece(&self) -> Option<(PieceBuffer, NextPiece)> {
+    fn next_least_common_piece(&self) -> Option<PieceBuffer> {
         let mut missing = self.missing_piece_indices();
 
         if self
@@ -205,7 +215,7 @@ impl TorrentPieceHandler {
 
             if let Some(peers) = peers {
                 if peers.len() == 1 {
-                    return Some(PieceBuffer::new_with_piece(
+                    return Some(PieceBuffer::new(
                         piece as u64,
                         self.piece_length,
                         self.id,
@@ -225,7 +235,7 @@ impl TorrentPieceHandler {
         }
 
         rarest_peers.map(|peers| {
-            PieceBuffer::new_with_piece(
+            PieceBuffer::new(
                 rarest_piece as u64,
                 self.piece_length,
                 self.id,
@@ -235,7 +245,7 @@ impl TorrentPieceHandler {
     }
 
     /// Compute the next piece to leech
-    fn next_piece(&mut self) -> Option<(PieceBuffer, NextPiece)> {
+    fn next_piece_buffer(&mut self) -> Option<PieceBuffer> {
         match self.selection_strategy {
             PieceSelection::Random => self.next_random_piece(),
             PieceSelection::Rarest => self.next_least_common_piece(),
@@ -243,13 +253,20 @@ impl TorrentPieceHandler {
     }
 }
 
+#[derive(Debug)]
 pub struct PieceBuffer {
-    /// All the blocks that are still missing.
-    pending_blocks: HashSet<BlockMetadata>,
+    /// Identifier for the torrent.
+    torrent_id: TorrentId,
+    /// All the blocks that still need to be downloaded.
+    missing_blocks: Vec<BlockMetadata>,
+    /// Blocks currently waited for.
+    pending_blocks: HashMap<PeerId, BlockMetadata>,
     /// The piece currently tracked.
-    current_piece: u64,
+    piece_index: u64,
     /// All the single blocks sorted by offset
     blocks: BTreeMap<u64, Block>,
+    /// The peers that have the `current_piece`
+    peers: Vec<PeerId>,
     /// The length of the piece all blocks belong to
     piece_length: u64,
     /// The amount of blocks in the Piece
@@ -262,6 +279,24 @@ impl PieceBuffer {
     /// 2^14 16kb per block
     const BLOCK_SIZE: u64 = 16384;
 
+    /// Return the next block to download if blocks are still missing and a peer
+    /// is not busy
+    pub fn next(&mut self) -> Option<NextBlock> {
+        if let Some(peer) = self.peers.pop() {
+            if let Some(block) = self.missing_blocks.pop() {
+                self.pending_blocks.insert(peer.clone(), block.clone());
+                return Some(NextBlock {
+                    torrent_id: self.torrent_id,
+                    peer,
+                    block,
+                });
+            } else {
+                self.peers.push(peer);
+            }
+        }
+        None
+    }
+
     /// Whether all the buffer owns the right amount of blocks
     #[inline]
     pub fn is_full_piece(&self) -> bool {
@@ -271,48 +306,44 @@ impl PieceBuffer {
     /// Adds the block in the buffer.
     /// If the `block`s metadata could not be validated, the block is returned
     pub fn add_block(&mut self, block: Block) -> Option<Block> {
-        if self.pending_blocks.remove(&block.metadata()) {
-            self.blocks.insert(block.metadata().block_offset, block);
-            None
-        } else {
-            Some(block)
-        }
+        unimplemented!()
+        //        if self.missing_blocks.remove(&block.metadata()) {
+        //            self.blocks.insert(block.metadata().block_offset, block);
+        //            None
+        //        } else {
+        //            Some(block)
+        //        }
     }
 
     /// Turn the buffer into a single block
-    pub fn finalize_piece(self) -> Result<Block, TorrentError> {
+    pub fn try_finalize_piece(self) -> Result<Block, TorrentError> {
         let mut buffer = BytesMut::with_capacity(self.piece_length as usize);
         for block in self.blocks.values() {
             if block.is_correct_len() {
                 buffer.put_slice(block);
             } else {
                 return Err(TorrentError::BadPiece {
-                    index: self.current_piece,
+                    index: self.piece_index,
                 });
             }
         }
 
         Ok(Block::new(
-            BlockMetadata::new(self.current_piece, 0, self.piece_length as usize),
+            BlockMetadata::new(self.piece_index, 0, self.piece_length as usize),
             buffer.freeze(),
         ))
     }
 
     /// Create a new buffer with the `NextPiece` message.
-    fn new_with_piece(
-        current_piece: u64,
-        piece_length: u64,
-        torrent_id: TorrentId,
-        peers: Vec<PeerId>,
-    ) -> (Self, NextPiece) {
+    fn new(piece_index: u64, piece_length: u64, torrent_id: TorrentId, peers: Vec<PeerId>) -> Self {
         let total_blocks = piece_length / PieceBuffer::BLOCK_SIZE;
         let mut last_block_size = piece_length % PieceBuffer::BLOCK_SIZE;
 
-        let mut blocks = (0..total_blocks).fold(
+        let mut missing_blocks = (0..total_blocks).fold(
             Vec::with_capacity(total_blocks as usize),
             |mut blocks, index| {
                 blocks.push(BlockMetadata::new(
-                    current_piece,
+                    piece_index,
                     index * PieceBuffer::BLOCK_SIZE,
                     PieceBuffer::BLOCK_SIZE as usize,
                 ));
@@ -323,39 +354,33 @@ impl PieceBuffer {
         if last_block_size == 0 {
             last_block_size = PieceBuffer::BLOCK_SIZE;
         } else {
-            blocks.push(BlockMetadata::new(
-                current_piece,
+            missing_blocks.push(BlockMetadata::new(
+                piece_index,
                 piece_length - last_block_size,
                 last_block_size as usize,
             ));
         }
 
-        let buffer = PieceBuffer {
-            pending_blocks: blocks.clone().into_iter().collect(),
-            current_piece,
+        Self {
+            torrent_id,
+            pending_blocks: HashMap::with_capacity(peers.len()),
+            missing_blocks,
+            piece_index,
             blocks: Default::default(),
             piece_length: 0,
+            peers,
             total_blocks,
             last_block_size,
-        };
-
-        let piece = NextPiece {
-            torrent_id,
-            peers,
-            piece_index: current_piece,
-            blocks,
-        };
-        (buffer, piece)
+        }
     }
 }
 
-pub struct NextPiece {
+#[derive(Debug)]
+pub struct NextBlock {
     /// Identifier for the torrent.
     pub torrent_id: TorrentId,
-    /// The index of the piece in the bitfield
-    pub piece_index: u64,
-    /// The peers that own that piece and have the client unchoked
-    pub peers: Vec<PeerId>,
-    /// The blocks this piece is split up
-    pub blocks: Vec<BlockMetadata>,
+    /// The index of the piece in the bitfield.
+    pub block: BlockMetadata,
+    /// The peer the block should be requested from.
+    pub peer: PeerId,
 }

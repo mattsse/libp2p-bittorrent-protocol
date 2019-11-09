@@ -27,15 +27,18 @@ pub struct TorrentPool<TInner> {
     pub local_peer_hash: ShaHash,
     pub local_peer_id: PeerId,
     torrents: FnvHashMap<TorrentId, Torrent<TInner>>,
-    timeout: Duration,
-    /// cannot be higher than the active torrents
+    /// The timeout after we choke a peer
+    peer_timeout: Duration,
+    /// Cannot be higher than the active torrents
     max_simultaneous_downloads: usize,
-    /// new torrents won't start if more are seeded/leeched
+    /// New torrents won't start if more are seeded/leeched
     max_active_torrents: usize,
-    /// move finished downloads
+    /// Move finished downloads to another folder
     move_completed_downloads: Option<PathBuf>,
-    /// how the initial pieces to download are selected
+    /// How the initial pieces to download are selected
     initial_piece_selection: PieceSelection,
+    /// Next unique Identifier of a torrent.
+    next_unique_torrent: usize,
 }
 
 /// The observable states emitted by [`TorrentPool::poll`].
@@ -44,10 +47,14 @@ pub enum TorrentPoolState<'a, TInner> {
     Idle,
     /// At least one torrent is waiting to generate requests.
     Waiting(&'a mut Torrent<TInner>),
-    /// A block is ready to process
-    BlockReady(TorrentId, Block),
+    /// A leeched piece is ready to process
+    PieceReady(TorrentId, Block),
+    /// A torrent is finished and remains in the pool for seeding.
+    Finished(TorrentId),
     /// A torrent has finished.
-    Finished(Torrent<TInner>),
+    Removed(Torrent<TInner>),
+    /// A torrent was added.
+    Added(TorrentId),
     /// the peer we need to send a new KeepAlive msg
     KeepAlive(PeerId),
     /// A remote peer has timed out.
@@ -67,11 +74,12 @@ impl<TInner> TorrentPool<TInner> {
             local_peer_hash,
             local_peer_id,
             torrents: FnvHashMap::default(),
-            timeout: Duration::from_secs(120),
+            peer_timeout: Duration::from_secs(120),
             max_simultaneous_downloads,
             max_active_torrents,
             move_completed_downloads: config.move_completed_downloads,
             initial_piece_selection: config.initial_piece_selection.unwrap_or_default(),
+            next_unique_torrent: 0,
         }
     }
 
@@ -171,7 +179,6 @@ pub struct Torrent<TInner> {
     /// the info hash of the torrent file, this is how torrents are identified
     pub info_hash: ShaHash,
     /// The peer iterator that drives the torrent's piece state.
-    // TODO this should be piece handler
     peer_iter: TorrentPieceHandler,
     /// The instant when the torrent started (i.e. began waiting for the first
     /// result from a peer).
