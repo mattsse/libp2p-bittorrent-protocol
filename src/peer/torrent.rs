@@ -8,7 +8,9 @@ use fnv::FnvHashMap;
 use libp2p_core::PeerId;
 use wasm_timer::Instant;
 
-use crate::behavior::{BittorrentConfig, SeedLeechConfig};
+use crate::behavior::{
+    BittorrentConfig, HandshakeError, HandshakeOk, HandshakeResult, SeedLeechConfig,
+};
 use crate::bitfield::BitField;
 use crate::disk::block::{Block, BlockMetadata, BlockMut};
 use crate::disk::error::TorrentError;
@@ -81,6 +83,122 @@ impl<TInner> TorrentPool<TInner> {
             initial_piece_selection: config.initial_piece_selection.unwrap_or_default(),
             next_unique_torrent: 0,
         }
+    }
+
+    /// The torrent that matches the hash
+    pub fn get_for_info_hash(&self, info_hash: &ShaHash) -> Option<&Torrent<TInner>> {
+        self.torrents
+            .values()
+            .filter(|x| x.info_hash == *info_hash)
+            .next()
+    }
+
+    /// The torrent that matches the hash
+    pub fn get_for_info_hash_mut(&mut self, info_hash: &ShaHash) -> Option<&mut Torrent<TInner>> {
+        self.torrents
+            .values_mut()
+            .filter(|x| x.info_hash == *info_hash)
+            .next()
+    }
+
+    /// Whether the peer is currently associated with a torrent
+    pub fn is_associated(&self, peer_id: &PeerId) -> bool {
+        for torrent in self.torrents.values() {
+            if torrent.contains_peer(peer_id) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Creates the response `HandShake` for a specific torrent
+    ///
+    /// If the `HandShakes`' info_hash could not be found the in pool or the
+    /// peer is already associated with a torrent a `None` value is returned.
+    pub fn create_handshake_response(
+        &mut self,
+        peer_id: PeerId,
+        handshake: Handshake,
+    ) -> Result<Handshake, HandshakeError> {
+        if self.is_associated(&peer_id) {
+            // peer is already tracked with a torrent
+            return Err(HandshakeError::InvalidPeer(peer_id, None));
+        }
+        if let Some(torrent) = self.get_for_info_hash_mut(&handshake.info_hash) {
+            let peer = BttPeer::new(handshake.peer_id);
+            // begin tracking the peer
+            torrent.peer_iter.insert_peer(peer_id, peer);
+            return Ok(Handshake::new(handshake.info_hash, self.local_peer_hash));
+        }
+        Err(HandshakeError::InfoHashMismatch(peer_id, None))
+    }
+
+    pub fn on_handshake(
+        &mut self,
+        peer_id: PeerId,
+        torrent_id: TorrentId,
+        handshake: &Handshake,
+    ) -> HandshakeResult {
+        if let Some(torrent) = self.torrents.get_mut(&torrent_id) {
+            if torrent.info_hash == handshake.info_hash {
+                let peer = BttPeer::new(handshake.peer_id);
+                torrent.peer_iter.insert_peer(peer_id.clone(), peer);
+                return Ok(HandshakeOk(peer_id));
+            }
+            return Err(HandshakeError::InfoHashMismatch(peer_id, Some(torrent_id)));
+        }
+        Err(HandshakeError::InvalidPeer(peer_id, Some(torrent_id)))
+    }
+
+    pub fn on_keep_alive(&mut self, peer_id: &PeerId, instant: Instant) {}
+
+    pub fn on_choked(&mut self, peer_id: &PeerId) {}
+
+    pub fn on_unchoked(&mut self, peer_id: &PeerId) {}
+
+    pub fn on_have(&mut self, peer_id: &PeerId, piece_index: u64) {}
+
+    /// Set the `Bitfield` for the peer associated with the torrent
+    ///
+    /// Returns `true` if the associated peer was found, `false` otherwise
+    pub fn set_bitfield(
+        &mut self,
+        peer_id: &PeerId,
+        torrent_id: TorrentId,
+        bitfield: BitField,
+    ) -> bool {
+        if let Some(torrent) = self.torrents.get_mut(&torrent_id) {
+            if let Some(peer) = torrent.peer_iter.get_peer_mut(peer_id) {
+                peer.set_bitfield(bitfield);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// Returns the bitfield for the torrent the peer is currently tracked on
+    ///
+    /// A `None` should result in dropping the connection
+    pub fn get_bitfield(&self, peer_id: &PeerId) -> Option<BitField> {
+        for torrent in self.torrents.values() {
+            if torrent.peer_iter.peers.contains_key(peer_id) {
+                return Some(torrent.peer_iter.bitfield().clone());
+            }
+        }
+        None
+    }
+
+    /// Drops the first peer from the pool that matches the id
+    ///
+    /// This is valid since only a single connection per torrent and peer is
+    /// allowed
+    pub fn remove_peer(&mut self, peer_id: &PeerId) -> Option<BttPeer> {
+        for torrent in self.torrents.values_mut() {
+            if let Some(peer) = torrent.remove_peer(peer_id) {
+                return Some(peer);
+            }
+        }
+        None
     }
 
     /// Returns an iterator over the torrents in the pool.
@@ -203,8 +321,16 @@ impl<TInner> Torrent<TInner> {
         self.peer_iter.peers.values()
     }
 
+    pub fn remove_peer(&mut self, peer_id: &PeerId) -> Option<BttPeer> {
+        self.peer_iter.remove_peer(peer_id)
+    }
+
     pub fn poll(&mut self, now: Instant) -> TorrentPoolState<TInner> {
         unimplemented!()
+    }
+
+    pub fn contains_peer(&self, peer_id: &PeerId) -> bool {
+        self.peer_iter.peers.contains_key(peer_id)
     }
 }
 

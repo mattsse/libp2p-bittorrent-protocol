@@ -188,6 +188,13 @@ where
     /// one substream per request
     fn inject_event(&mut self, message: BittorrentHandlerIn<TUserData>) {
         match message {
+            BittorrentHandlerIn::Disconnect(timeout) => {
+                if let Some(timeout) = timeout {
+                    self.keep_alive = KeepAlive::Until(timeout);
+                } else {
+                    self.keep_alive = KeepAlive::No;
+                }
+            }
             BittorrentHandlerIn::Reset(request_id) => {
                 let pos = self.substreams.iter().position(|state| match state {
                     SubstreamState::InWaitingUser(conn_id, _) => {
@@ -399,6 +406,8 @@ where
 /// Event to send to the handler.
 #[derive(Debug)]
 pub enum BittorrentHandlerIn<TUserData> {
+    /// Signals that the connection should disconnected
+    Disconnect(Option<Instant>),
     /// Resets the (sub)stream associated with the given request ID,
     /// thus signaling an error to the remote.
     ///

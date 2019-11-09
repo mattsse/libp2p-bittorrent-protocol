@@ -226,35 +226,96 @@ where
         // TODO lookup peer in DHT for torrents
 
         // handshake for every torrent we currently leeching
-        for torrent in self.torrents.iter_leeching() {
-            self.queued_events
-                .push_back(NetworkBehaviourAction::SendEvent {
-                    peer_id: peer_id.clone(),
-                    event: BittorrentHandlerIn::HandshakeReq {
-                        handshake: Handshake::new(
-                            torrent.info_hash.clone(),
-                            self.torrents.local_peer_hash.clone(),
-                        ),
-                        user_data: torrent.id(),
-                    },
-                });
-        }
+        //        if endpoint.is_dialer() {
+        //            for torrent in self.torrents.iter_leeching() {
+        //                self.queued_events
+        //                    .push_back(NetworkBehaviourAction::SendEvent {
+        //                        peer_id: peer_id.clone(),
+        //                        event: BittorrentHandlerIn::HandshakeReq {
+        //                            handshake: Handshake::new(
+        //                                torrent.info_hash.clone(),
+        //                                self.torrents.local_peer_hash.clone(),
+        //                            ),
+        //                            user_data: torrent.id(),
+        //                        },
+        //                    });
+        //            }
+        //        }
 
         self.connected_peers.insert(peer_id);
     }
 
     fn inject_disconnected(&mut self, peer_id: &PeerId, endpoint: ConnectedPoint) {
+        // remove torrent from the pool
+        self.torrents.remove_peer(peer_id);
         self.connected_peers.remove(peer_id);
     }
 
     /// send from the handler
     fn inject_node_event(&mut self, peer_id: PeerId, event: BittorrentHandlerEvent<TorrentId>) {
         match event {
-            BittorrentHandlerEvent::HandshakeReq { .. } => {}
-            BittorrentHandlerEvent::HandshakeRes { .. } => {}
-            BittorrentHandlerEvent::BitfieldReq { .. } => {}
-            BittorrentHandlerEvent::BitfieldRes { .. } => {}
-            BittorrentHandlerEvent::GetPieceReq { .. } => {}
+            BittorrentHandlerEvent::HandshakeReq {
+                handshake,
+                request_id,
+            } => {
+                // a peer initiated a handshake
+                match self
+                    .torrents
+                    .create_handshake_response(peer_id.clone(), handshake)
+                {
+                    Ok(handshake) => {
+                        self.queued_events
+                            .push_back(NetworkBehaviourAction::SendEvent {
+                                peer_id,
+                                event: BittorrentHandlerIn::HandshakeRes {
+                                    handshake,
+                                    request_id,
+                                },
+                            });
+                    }
+                    Err(err) => {
+                        self.queued_events
+                            .push_back(NetworkBehaviourAction::GenerateEvent(
+                                BittorrentEvent::HandshakeResult(Err(err)),
+                            ));
+                        // drop the connection
+                        self.queued_events
+                            .push_back(NetworkBehaviourAction::SendEvent {
+                                peer_id,
+                                event: BittorrentHandlerIn::Disconnect(None),
+                            });
+                    }
+                }
+            }
+            BittorrentHandlerEvent::HandshakeRes {
+                handshake,
+                user_data,
+            } => {
+                // a peer responded to our handshake request
+                let result = self.torrents.on_handshake(peer_id, user_data, &handshake);
+                self.queued_events
+                    .push_back(NetworkBehaviourAction::GenerateEvent(
+                        BittorrentEvent::HandshakeResult(result),
+                    ));
+            }
+            BittorrentHandlerEvent::BitfieldReq {
+                index_field,
+                request_id,
+            } => {
+                // a peer requested the bitfield
+            }
+            BittorrentHandlerEvent::BitfieldRes {
+                index_field,
+                user_data,
+            } => {
+                // we received a bitfield from a remote
+                if !self.torrents.set_bitfield(&peer_id, user_data, index_field) {
+                    // TODO drop connection
+                }
+            }
+            BittorrentHandlerEvent::GetPieceReq { .. } => {
+                // TODO check config for seeding
+            }
             BittorrentHandlerEvent::GetPieceRes { .. } => {}
             BittorrentHandlerEvent::CancelPiece { .. } => {}
             BittorrentHandlerEvent::Choke { .. } => {}
@@ -305,7 +366,7 @@ where
             // Look for a finished bittorrent.
             loop {
                 match self.torrents.poll(now) {
-                    TorrentPoolState::Finished(q) => {
+                    TorrentPoolState::Removed(q) => {
                         if let Some(event) = self.torrent_finished(q, parameters) {
                             return Async::Ready(NetworkBehaviourAction::GenerateEvent(event));
                         }
@@ -315,7 +376,7 @@ where
                             return Async::Ready(NetworkBehaviourAction::GenerateEvent(event));
                         }
                     }
-                    TorrentPoolState::BlockReady(torrent_id, buffer) => {
+                    TorrentPoolState::PieceReady(torrent_id, buffer) => {
                         if let Some(event) = self.block_ready(torrent_id, buffer) {
                             return Async::Ready(NetworkBehaviourAction::GenerateEvent(event));
                         }
@@ -331,6 +392,7 @@ where
                         continue;
                     }
                     TorrentPoolState::Idle => continue,
+                    _ => {}
                 }
             }
 
@@ -367,12 +429,14 @@ pub type DiskResult = Result<DiskMessageOut, ()>;
 
 /// The successful result of [`Bittorrent::handshake`].
 #[derive(Debug, Clone)]
-pub struct HandshakeOk(PeerId);
+pub struct HandshakeOk(pub PeerId);
 
 /// The error result of [`Bittorrent::handshake`].
 #[derive(Debug, Clone)]
 pub enum HandshakeError {
-    Timeout { peer: PeerId },
+    InfoHashMismatch(PeerId, Option<TorrentId>),
+    InvalidPeer(PeerId, Option<TorrentId>),
+    Timeout(PeerId),
 }
 
 #[derive(Debug, Clone)]

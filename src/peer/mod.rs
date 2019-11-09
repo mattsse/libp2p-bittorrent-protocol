@@ -45,7 +45,7 @@ pub struct BttPeer {
     //    /// Identifier of the peer.
     //    pub node_id: PeerId,
     /// The peer's bittorrent id
-    pub peer_id: ShaHash,
+    pub peer_btt_id: ShaHash,
     /// What pieces this peers owns or lacks
     pub piece_field: Option<BitField>,
     /// History of send/receive statistics
@@ -59,10 +59,21 @@ pub struct BttPeer {
 }
 
 impl BttPeer {
-    pub fn new<T: Into<ShaHash>>(peer_id: T, piece_field: BitField) -> Self {
+    pub fn new<T: Into<ShaHash>>(peer_btt_id: T) -> Self {
+        Self {
+            piece_field: None,
+            peer_btt_id: peer_btt_id.into(),
+            stats: Default::default(),
+            choke_ty: Default::default(),
+            interest_ty: Default::default(),
+            keep_alive: Instant::now(),
+        }
+    }
+
+    pub fn new_with_bitfield<T: Into<ShaHash>>(peer_btt_id: T, piece_field: BitField) -> Self {
         Self {
             piece_field: Some(piece_field),
-            peer_id: peer_id.into(),
+            peer_btt_id: peer_btt_id.into(),
             stats: Default::default(),
             choke_ty: Default::default(),
             interest_ty: Default::default(),
