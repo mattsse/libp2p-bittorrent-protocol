@@ -7,6 +7,7 @@ use futures::Async;
 use crate::disk::error::TorrentError;
 use crate::disk::file::TorrentFileId;
 use crate::disk::fs::FileSystem;
+use crate::proto::message::PeerRequest;
 use crate::util::{ShaHash, SHA_HASH_LEN};
 
 /// `BlockMetadata` which tracks metadata associated with a `Block` of memory.
@@ -42,6 +43,16 @@ impl BlockMetadata {
 impl Default for BlockMetadata {
     fn default() -> BlockMetadata {
         BlockMetadata::new(0, 0, 0)
+    }
+}
+
+impl From<PeerRequest> for BlockMetadata {
+    fn from(request: PeerRequest) -> Self {
+        BlockMetadata {
+            piece_index: request.index as u64,
+            block_offset: request.begin as u64,
+            block_length: request.length as usize,
+        }
     }
 }
 

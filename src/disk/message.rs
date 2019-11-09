@@ -4,6 +4,8 @@ use crate::peer::torrent::TorrentId;
 use crate::torrent::MetaInfo;
 use crate::util::ShaHash;
 
+// TODO add messages for moving finished files
+
 /// Messages that can be sent to the `DiskManager`.
 #[derive(Debug)]
 pub enum DiskMessageIn {
