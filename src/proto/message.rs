@@ -127,10 +127,10 @@ impl PeerMessage {
                 buf.write_u32::<BigEndian>(*index)?;
             }
             PeerMessage::Bitfield { index_field } => {
-                let bytes = index_field.to_bytes();
-                buf.write_u32::<BigEndian>(1 + bytes.len() as u32)?;
+                buf.write_u32::<BigEndian>(1 + index_field.len() as u32)?;
                 buf.write_u8(5)?;
-                buf.write_all(&bytes)?;
+                // sparse bits are zero
+                buf.write_all(&index_field.to_bytes())?;
             }
             PeerMessage::Request {
                 request: peer_request,

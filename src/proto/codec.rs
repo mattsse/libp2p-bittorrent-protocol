@@ -104,21 +104,45 @@ impl Decoder for PeerWireCodec {
                     }
                 }
                 length => {
-                    let msg_length = 4 + length as usize;
-                    if src.len() < msg_length {
-                        src.reserve(msg_length - src.len());
+                    if src[4] == PeerMessage::BITFIELD_ID {
+                        // in the `BitField` msg the length is the amount of bits
+                        let number_of_pieces = length as usize - 1;
+                        if number_of_pieces == 0 {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "Empty BitField message not supported",
+                            ));
+                        }
+
+                        let mut bitfield_bytes_len = number_of_pieces / 8;
+                        let rem = number_of_pieces % 8;
+                        if rem > 0 {
+                            bitfield_bytes_len += 1;
+                        }
+                        // complete len: len (4) + id (1) + bitfield_bytes_len
+                        let msg_bytes_length = bitfield_bytes_len + 5;
+                        if src.len() < msg_bytes_length {
+                            src.reserve(msg_bytes_length - src.len());
+                            return Ok(None);
+                        }
+                        let msg = src.split_to(msg_bytes_length);
+
+                        let mut index_field = BitField::from_bytes(&msg[5..]);
+                        // remove sparse bits
+                        index_field.truncate(number_of_pieces);
+
+                        return Ok(Some(PeerMessage::Bitfield { index_field }));
+                    }
+
+                    let msg_bytes_length = 4 + length as usize;
+                    if src.len() < msg_bytes_length {
+                        src.reserve(msg_bytes_length - src.len());
                         return Ok(None);
                     }
 
                     match src[4] {
-                        PeerMessage::BITFIELD_ID => {
-                            let msg = src.split_to(msg_length);
-                            Ok(Some(PeerMessage::Bitfield {
-                                index_field: BitField::from_bytes(&msg[5..]),
-                            }))
-                        }
                         PeerMessage::REQUEST_ID => {
-                            let msg = src.split_to(msg_length);
+                            let msg = src.split_to(msg_bytes_length);
                             Ok(Some(PeerMessage::Request {
                                 request: PeerRequest {
                                     index: BigEndian::read_u32(&msg[5..9]),
@@ -128,7 +152,7 @@ impl Decoder for PeerWireCodec {
                             }))
                         }
                         PeerMessage::PIECE_ID => {
-                            let msg = src.split_to(msg_length);
+                            let msg = src.split_to(msg_bytes_length);
                             Ok(Some(PeerMessage::Piece {
                                 piece: Piece {
                                     index: BigEndian::read_u32(&msg[5..9]),
@@ -138,7 +162,7 @@ impl Decoder for PeerWireCodec {
                             }))
                         }
                         PeerMessage::CANCEL_ID => {
-                            let msg = src.split_to(msg_length);
+                            let msg = src.split_to(msg_bytes_length);
                             Ok(Some(PeerMessage::Cancel {
                                 request: PeerRequest {
                                     index: BigEndian::read_u32(&msg[5..9]),
@@ -148,7 +172,7 @@ impl Decoder for PeerWireCodec {
                             }))
                         }
                         PeerMessage::PORT_ID => {
-                            let msg = src.split_to(msg_length);
+                            let msg = src.split_to(msg_bytes_length);
                             Ok(Some(PeerMessage::Port {
                                 port: BigEndian::read_u16(&msg[5..]),
                             }))
