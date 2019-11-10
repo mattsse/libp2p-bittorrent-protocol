@@ -135,6 +135,7 @@ impl TorrentPieceHandler {
         peer
     }
 
+    /// Returns the `BttPeer` that's tracked with the `PeerId`
     pub fn get_peer(&self, id: &PeerId) -> Option<&BttPeer> {
         self.peers.get(id)
     }
@@ -177,6 +178,11 @@ impl TorrentPieceHandler {
         }
     }
 
+    /// Set the index in the peer's bitfield
+    ///
+    /// If no `BttPeer` is currently tracked for the `peer_id` a `None` value is
+    /// returned otherwise whether the `piece_index` was in bounds of the peer's
+    /// bitfield.
     pub fn add_peer_piece(&mut self, peer_id: &PeerId, piece_index: usize) -> Option<bool> {
         if let Some(peer) = self.peers.get_mut(peer_id) {
             if peer.has_bitfield() {
@@ -198,6 +204,7 @@ impl TorrentPieceHandler {
     }
 
     /// Set the piece at the index to owned.
+    ///
     /// If the piece_index is out of bounds a error value is returned.
     pub fn add_piece(&mut self, piece_index: usize) -> Result<(), ()> {
         if piece_index < self.have.len() {
@@ -209,6 +216,7 @@ impl TorrentPieceHandler {
     }
 
     /// Set the piece at the index to missing.
+    ///
     /// If the piece_index is out of bounds a error value is returned.
     pub fn remove_piece(&mut self, piece_index: usize) -> Result<(), ()> {
         if piece_index < self.have.len() {
@@ -329,6 +337,7 @@ impl TorrentPieceHandler {
     }
 }
 
+/// Drives a specific piece to completion.
 #[derive(Debug)]
 pub struct PieceBuffer {
     /// Identifier for the torrent.
@@ -395,6 +404,7 @@ impl PieceBuffer {
     /// Adds the block in the buffer.
     /// If the `block`s metadata could not be validated, the block is returned
     pub fn add_block(&mut self, block: Block) -> Option<Block> {
+        // TODO this needs the &PeerId of the peer that sent this block
         unimplemented!()
         //        if self.missing_blocks.remove(&block.metadata()) {
         //            self.blocks.insert(block.metadata().block_offset, block);

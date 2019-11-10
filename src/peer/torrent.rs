@@ -171,6 +171,10 @@ impl<TInner> TorrentPool<TInner> {
         Err(PeerError::NotFound(peer_id))
     }
 
+    /// Event handling for a [`PeerMessage::Interested`] or
+    /// [`PeerMessage::NotInterested`] sent by the remote.
+    ///
+    /// Sets the state of the corresponding `BttPeer` accordingly.
     pub fn on_interest_by_remote(
         &mut self,
         peer_id: PeerId,
@@ -189,7 +193,13 @@ impl<TInner> TorrentPool<TInner> {
         }
         Err(PeerError::NotFound(peer_id))
     }
-
+    /// Event handling for a [`BittorrentHandlerEvent::GetPieceReq`].
+    ///
+    /// Remote want's to leech a block.
+    /// We check if the remote is currently tracked and the remote is interested
+    /// and not choked and that we own the requested block. If Not a `None`
+    /// value is returned, otherwise the corresponding [`DiskMessageIn`] that
+    /// the Diskmanager needs to read the block.
     pub fn on_piece_request(
         &self,
         peer_id: &PeerId,
@@ -370,6 +380,11 @@ impl<TInner> Torrent<TInner> {
 
     pub fn remove_peer(&mut self, peer_id: &PeerId) -> Option<BttPeer> {
         self.peer_iter.remove_peer(peer_id)
+    }
+
+    /// The bitfield of the client.
+    pub fn bitfield(&self) -> &BitField {
+        self.peer_iter.bitfield()
     }
 
     pub fn poll(&mut self, now: Instant) -> TorrentPoolState<TInner> {
