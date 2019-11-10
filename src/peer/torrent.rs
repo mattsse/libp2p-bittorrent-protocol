@@ -66,6 +66,7 @@ pub enum TorrentPoolState<'a, TInner> {
 }
 
 impl<TInner> TorrentPool<TInner> {
+    /// Create a new pool for the `config`.
     pub fn new(local_peer_id: PeerId, config: BittorrentConfig) -> Self {
         let local_peer_hash = config.peer_hash.unwrap_or_else(|| ShaHash::random());
         let max_simultaneous_downloads = config
@@ -85,6 +86,31 @@ impl<TInner> TorrentPool<TInner> {
             initial_piece_selection: config.initial_piece_selection.unwrap_or_default(),
             next_unique_torrent: 0,
         }
+    }
+
+    /// Whether the remote can contribute to the torrent's completion
+    pub fn is_remote_interesting(&self, torrent_id: TorrentId, peer_id: &PeerId) -> bool {
+        if let Some(torrent) = self.torrents.get(&torrent_id) {
+            if torrent.seed_leech().is_leeching() {
+                if let Some(peer) = torrent.peer_iter.get_peer(peer_id) {
+                    return peer.is_having_missing_pieces_for(torrent.bitfield());
+                }
+            }
+        }
+        false
+    }
+
+    /// Sets the client's interest in a peer for a torrent
+    pub fn set_client_interest(
+        &mut self,
+        torrent_id: TorrentId,
+        peer_id: &PeerId,
+        interest: InterestType,
+    ) -> Option<InterestType> {
+        if let Some(torrent) = self.torrents.get_mut(&torrent_id) {
+            return torrent.set_client_interest(peer_id, interest);
+        }
+        None
     }
 
     /// The torrent that matches the hash
@@ -198,6 +224,7 @@ impl<TInner> TorrentPool<TInner> {
         }
         Err(PeerError::NotFound(peer_id))
     }
+
     /// Event handling for a [`BittorrentHandlerEvent::GetPieceReq`].
     ///
     /// Remote want's to leech a block.
@@ -316,7 +343,7 @@ impl<TInner> TorrentPool<TInner> {
     pub fn iter_leeching(&self) -> impl Iterator<Item = &Torrent<TInner>> {
         self.torrents
             .values()
-            .filter(|torrent| torrent.state != SeedLeechConfig::Seed)
+            .filter(|torrent| torrent.state != SeedLeechConfig::SeedOnly)
     }
 
     pub fn iter_leeching_from(&self) -> impl Iterator<Item = &PeerId> {
@@ -327,7 +354,7 @@ impl<TInner> TorrentPool<TInner> {
     pub fn iter_seeding(&self) -> impl Iterator<Item = &Torrent<TInner>> {
         self.torrents
             .values()
-            .filter(|torrent| torrent.state != SeedLeechConfig::Leech)
+            .filter(|torrent| torrent.state != SeedLeechConfig::LeechOnly)
     }
 
     pub fn iter_seeding_to(&self) -> impl Iterator<Item = &PeerId> {
@@ -338,7 +365,7 @@ impl<TInner> TorrentPool<TInner> {
     pub fn iter_complete_seeds(&self) -> impl Iterator<Item = &Torrent<TInner>> {
         self.torrents
             .values()
-            .filter(|torrent| torrent.state == SeedLeechConfig::Seed)
+            .filter(|torrent| torrent.state == SeedLeechConfig::SeedOnly)
     }
 
     /// Returns a mutablereference to a torrent with the given ID, if it is in
@@ -363,10 +390,10 @@ pub struct Torrent<TInner> {
     /// The instant when the torrent started (i.e. began waiting for the first
     /// result from a peer).
     started: Instant,
-    /// The opaque inner piece state.
+    /// The opaque inner state.
     pub inner: TInner,
-    /// the state of the torrent
-    pub state: SeedLeechConfig,
+    /// The state of how the torrent should send/receive blocks
+    state: SeedLeechConfig,
 }
 
 impl<TInner> Torrent<TInner> {
@@ -448,6 +475,14 @@ impl<TInner> Torrent<TInner> {
             .set_interest_on_remote(peer_id, InterestType::NotInterested)
     }
 
+    pub fn set_client_interest(
+        &mut self,
+        peer_id: &PeerId,
+        interest: InterestType,
+    ) -> Option<InterestType> {
+        self.peer_iter.set_client_interest(peer_id, interest)
+    }
+
     pub fn on_remote_have(&mut self, peer_id: &PeerId, piece_index: usize) -> Option<bool> {
         if let Some(peer) = self.peer_iter.get_peer_mut(peer_id) {
             peer.add_piece(piece_index)
@@ -485,6 +520,10 @@ impl<TInner> Torrent<TInner> {
     /// If the peer is currently tracked by this torrent.
     pub fn contains_peer(&self, peer_id: &PeerId) -> bool {
         self.peer_iter.peers.contains_key(peer_id)
+    }
+
+    pub fn seed_leech(&self) -> &SeedLeechConfig {
+        &self.state
     }
 }
 

@@ -17,7 +17,7 @@ use wasm_timer::Instant;
 use crate::disk::block::Block;
 use crate::disk::message::DiskMessageOut;
 use crate::peer::piece::PieceBuffer;
-use crate::peer::BttPeer;
+use crate::peer::{BttPeer, InterestType};
 use crate::proto::message::Handshake;
 use crate::{
     disk::error::TorrentError,
@@ -353,13 +353,23 @@ where
                     .torrents
                     .set_peer_bitfield(&peer_id, user_data, index_field)
                 {
-                    self.queued_events
-                        .push_back(NetworkBehaviourAction::SendEvent {
-                            peer_id,
-                            event: BittorrentHandlerIn::Disconnect(None),
-                        });
+                    if self.torrents.is_remote_interesting(user_data, &peer_id) {
+                        self.torrents.set_client_interest(
+                            user_data,
+                            &peer_id,
+                            InterestType::Interested,
+                        );
+                        self.queued_events
+                            .push_back(NetworkBehaviourAction::SendEvent {
+                                peer_id,
+                                event: BittorrentHandlerIn::Interest {
+                                    inner: InterestType::Interested,
+                                },
+                            });
+                    }
+                } else {
+                    // TODO disconnect?
                 }
-                // TODO start sending interest
             }
             BittorrentHandlerEvent::GetPieceReq {
                 request,
@@ -558,16 +568,46 @@ pub struct GoodPiece((TorrentId, u64));
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum SeedLeechConfig {
     /// only send blocks
-    Seed,
+    SeedOnly,
     /// only receive blocks
-    Leech,
+    LeechOnly,
     /// send blocks to remote and receive missing blocks
-    Both,
+    SeedAndLeech,
+}
+
+impl SeedLeechConfig {
+    pub fn is_seed_only(&self) -> bool {
+        match self {
+            SeedLeechConfig::SeedOnly => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_leech_only(&self) -> bool {
+        match self {
+            SeedLeechConfig::LeechOnly => true,
+            _ => false,
+        }
+    }
+    pub fn is_seed_and_leech(&self) -> bool {
+        match self {
+            SeedLeechConfig::SeedAndLeech => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_seeding(&self) -> bool {
+        !self.is_leech_only()
+    }
+
+    pub fn is_leeching(&self) -> bool {
+        !self.is_seed_only()
+    }
 }
 
 impl Default for SeedLeechConfig {
     fn default() -> Self {
-        SeedLeechConfig::Both
+        SeedLeechConfig::SeedAndLeech
     }
 }
 

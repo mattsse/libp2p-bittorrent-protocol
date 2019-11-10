@@ -74,7 +74,7 @@ impl TorrentPieceHandler {
         }
     }
 
-    pub fn set_client_interest_for_peer(
+    pub fn set_client_interest(
         &mut self,
         peer_id: &PeerId,
         interest: InterestType,
