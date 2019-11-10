@@ -1,5 +1,6 @@
+use std::ops::{Deref, DerefMut};
+
 use bit_vec::BitVec;
-use bitflags::_core::ops::{Deref, DerefMut};
 
 use crate::piece::PieceState;
 

@@ -3,9 +3,9 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::convert::TryInto;
+use std::marker::PhantomData;
 use std::path::PathBuf;
 
-use bitflags::_core::marker::PhantomData;
 use fnv::{FnvHashMap, FnvHashSet};
 use futures::{Async, Future};
 use libp2p_core::{ConnectedPoint, Multiaddr, PeerId};
@@ -336,6 +336,7 @@ where
                             event: BittorrentHandlerIn::Disconnect(None),
                         });
                 }
+                // TODO start sending interest
             }
             BittorrentHandlerEvent::GetPieceReq {
                 request,
@@ -348,17 +349,18 @@ where
             }
             BittorrentHandlerEvent::GetPieceRes { .. } => {}
             BittorrentHandlerEvent::CancelPiece { .. } => {}
-            BittorrentHandlerEvent::Choke { .. } => {}
+            BittorrentHandlerEvent::Choke { .. } => {
+                // TODO update the state
+            }
             BittorrentHandlerEvent::Interest { inner } => {
+                let interest = self.torrents.on_interest_by_remote(peer_id, inner);
+                // TODO optimistic unchoking if remote is interested
                 self.queued_events
                     .push_back(NetworkBehaviourAction::GenerateEvent(
-                        BittorrentEvent::InterestResult(
-                            self.torrents.on_interest_by_remote(peer_id, inner),
-                        ),
+                        BittorrentEvent::InterestResult(interest),
                     ))
             }
             BittorrentHandlerEvent::Have { .. } => {}
-            BittorrentHandlerEvent::TorrentErr { .. } => {}
             BittorrentHandlerEvent::KeepAlive { timestamp } => {
                 self.queued_events
                     .push_back(NetworkBehaviourAction::GenerateEvent(
@@ -367,6 +369,7 @@ where
                         ),
                     ))
             }
+            BittorrentHandlerEvent::TorrentErr { .. } => {}
         }
     }
 
