@@ -261,7 +261,7 @@ where
                 // a peer initiated a handshake
                 match self
                     .torrents
-                    .create_handshake_response(peer_id.clone(), handshake)
+                    .on_handshake_request(peer_id.clone(), handshake)
                 {
                     Ok(handshake) => {
                         self.queued_events
@@ -292,11 +292,34 @@ where
                 user_data,
             } => {
                 // a peer responded to our handshake request
-                let result = self.torrents.on_handshake(peer_id, user_data, &handshake);
-                self.queued_events
-                    .push_back(NetworkBehaviourAction::GenerateEvent(
-                        BittorrentEvent::HandshakeResult(result),
-                    ));
+                match self
+                    .torrents
+                    .on_handshake_response(peer_id.clone(), user_data, &handshake)
+                {
+                    Ok((handshake, index_field)) => {
+                        // initiate bitfield exchange with the remote
+                        self.queued_events
+                            .push_back(NetworkBehaviourAction::SendEvent {
+                                peer_id,
+                                event: BittorrentHandlerIn::BitfieldReq {
+                                    index_field,
+                                    user_data,
+                                },
+                            });
+
+                        // notify user
+                        self.queued_events
+                            .push_back(NetworkBehaviourAction::GenerateEvent(
+                                BittorrentEvent::HandshakeResult(Ok(handshake)),
+                            ));
+                    }
+                    Err(e) => {
+                        self.queued_events
+                            .push_back(NetworkBehaviourAction::GenerateEvent(
+                                BittorrentEvent::HandshakeResult(Err(e)),
+                            ));
+                    }
+                }
             }
             BittorrentHandlerEvent::BitfieldReq {
                 index_field,
@@ -349,8 +372,9 @@ where
             }
             BittorrentHandlerEvent::GetPieceRes { .. } => {}
             BittorrentHandlerEvent::CancelPiece { .. } => {}
-            BittorrentHandlerEvent::Choke { .. } => {
+            BittorrentHandlerEvent::Choke { inner } => {
                 // TODO update the state
+                //                let choke = self.torrents.on_ch
             }
             BittorrentHandlerEvent::Interest { inner } => {
                 let interest = self.torrents.on_interest_by_remote(peer_id, inner);

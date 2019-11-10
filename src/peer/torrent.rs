@@ -115,9 +115,9 @@ impl<TInner> TorrentPool<TInner> {
 
     /// Creates the response `HandShake` for a specific torrent
     ///
-    /// If the `HandShakes`' info_hash could not be found the in pool or the
+    /// If the `Handshakes`' info_hash could not be found the in pool or the
     /// peer is already associated with a torrent a `None` value is returned.
-    pub fn create_handshake_response(
+    pub fn on_handshake_request(
         &mut self,
         peer_id: PeerId,
         handshake: Handshake,
@@ -135,17 +135,22 @@ impl<TInner> TorrentPool<TInner> {
         Err(HandshakeError::InfoHashMismatch(peer_id, None))
     }
 
-    pub fn on_handshake(
+    ///  Event handling for a [`BittorrentHandlerEvent::HandshakeRes`] sent by
+    /// the remote.
+    ///
+    /// If we still the torrent identified with the `torrent_id`, we begin to
+    /// track the peer
+    pub fn on_handshake_response(
         &mut self,
         peer_id: PeerId,
         torrent_id: TorrentId,
         handshake: &Handshake,
-    ) -> HandshakeResult {
+    ) -> Result<(HandshakeOk, BitField), HandshakeError> {
         if let Some(torrent) = self.torrents.get_mut(&torrent_id) {
             if torrent.info_hash == handshake.info_hash {
                 let peer = BttPeer::new(handshake.peer_id);
                 torrent.peer_iter.insert_peer(peer_id.clone(), peer);
-                return Ok(HandshakeOk(peer_id));
+                return Ok((HandshakeOk(peer_id), torrent.bitfield().clone()));
             }
             return Err(HandshakeError::InfoHashMismatch(peer_id, Some(torrent_id)));
         }
