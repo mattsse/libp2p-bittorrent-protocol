@@ -7,12 +7,14 @@ use libp2p_core::PeerId;
 use rand::{self, seq::SliceRandom, Rng};
 use wasm_timer::Instant;
 
+use crate::behavior::BlockErr;
 use crate::bitfield::BitField;
 use crate::disk::block::{Block, BlockMetadata, BlockMut};
 use crate::disk::error::TorrentError;
 use crate::peer::torrent::TorrentId;
 use crate::peer::{BttPeer, ChokeType, InterestType};
 use crate::piece::PieceSelection;
+use log::Metadata;
 
 /// Tracks the progress of the handler
 #[derive(Debug)]
@@ -227,6 +229,16 @@ impl TorrentPieceHandler {
         }
     }
 
+    pub fn add_block(&mut self, peerid: &PeerId, block: Block) -> Result<BlockMetadata, BlockErr> {
+        if let Some(buffer) = &mut self.piece_buffer {
+            return buffer.add_block(peerid, block);
+        }
+        Err(BlockErr::NotRequested {
+            peer_id: peerid.clone(),
+            block,
+        })
+    }
+
     /// All piece indices that are still missing
     fn missing_piece_indices(&self) -> Vec<usize> {
         self.have
@@ -402,16 +414,30 @@ impl PieceBuffer {
     }
 
     /// Adds the block in the buffer.
+    ///
     /// If the `block`s metadata could not be validated, the block is returned
-    pub fn add_block(&mut self, block: Block) -> Option<Block> {
-        // TODO this needs the &PeerId of the peer that sent this block
-        unimplemented!()
-        //        if self.missing_blocks.remove(&block.metadata()) {
-        //            self.blocks.insert(block.metadata().block_offset, block);
-        //            None
-        //        } else {
-        //            Some(block)
-        //        }
+    pub fn add_block(&mut self, peerid: &PeerId, block: Block) -> Result<BlockMetadata, BlockErr> {
+        if let Some((id, expected)) = self.pending_blocks.remove_entry(peerid) {
+            // validate block
+            if block.metadata() == expected {
+                self.blocks.insert(block.metadata().block_offset, block);
+                self.peers.push(id);
+                Ok(expected)
+            } else {
+                self.missing_blocks.push(expected);
+                self.peers.push(id);
+                Err(BlockErr::InvalidBlock {
+                    peer_id: peerid.clone(),
+                    expected: expected.clone(),
+                    block,
+                })
+            }
+        } else {
+            Err(BlockErr::NotRequested {
+                peer_id: peerid.clone(),
+                block,
+            })
+        }
     }
 
     /// Turn the buffer into a single block

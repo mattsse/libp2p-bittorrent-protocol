@@ -9,8 +9,8 @@ use libp2p_core::PeerId;
 use wasm_timer::Instant;
 
 use crate::behavior::{
-    BittorrentConfig, HandshakeError, HandshakeOk, HandshakeResult, InterestOk, InterestResult,
-    KeepAliveOk, KeepAliveResult, PeerError, SeedLeechConfig,
+    BittorrentConfig, BlockErr, HandshakeError, HandshakeOk, HandshakeResult, InterestOk,
+    InterestResult, KeepAliveOk, KeepAliveResult, PeerError, SeedLeechConfig,
 };
 use crate::bitfield::BitField;
 use crate::disk::block::{Block, BlockMetadata, BlockMut};
@@ -18,7 +18,7 @@ use crate::disk::error::TorrentError;
 use crate::disk::message::DiskMessageIn;
 use crate::peer::piece::TorrentPieceHandler;
 use crate::peer::{BttPeer, ChokeType, InterestType};
-use crate::piece::PieceSelection;
+use crate::piece::{Piece, PieceSelection};
 use crate::proto::message::{Handshake, PeerRequest};
 use crate::util::ShaHash;
 
@@ -245,7 +245,35 @@ impl<TInner> TorrentPool<TInner> {
         None
     }
 
-    pub fn on_have(&mut self, peer_id: &PeerId, piece_index: u64) {}
+    /// Event handling for a [`BittorrentHandlerEvent::GetPieceRes`].
+    pub fn on_block_response(
+        &mut self,
+        torrent_id: TorrentId,
+        peer_id: &PeerId,
+        block: Block,
+    ) -> Result<BlockMetadata, BlockErr> {
+        if let Some(torrent) = self.get_mut(&torrent_id) {
+            return torrent.add_block(peer_id, block);
+        }
+        Err(BlockErr::NotRequested {
+            peer_id: peer_id.clone(),
+            block,
+        })
+    }
+
+    /// Event handling for a [`BittorrentHandlerEvent::Have`].
+    ///
+    /// Update the peer's bitfield.
+    /// If the peer was not found a `None` value is returned, otherwise if the
+    /// `piece_index` was in bounds.
+    pub fn on_have(&mut self, peer_id: &PeerId, piece_index: usize) -> Option<bool> {
+        for torrent in self.torrents.values_mut() {
+            if let Some(bit) = torrent.on_remote_have(peer_id, piece_index) {
+                return Some(bit);
+            }
+        }
+        None
+    }
 
     /// Set the `Bitfield` for the peer associated with the torrent
     ///
@@ -414,6 +442,10 @@ impl<TInner> Torrent<TInner> {
         self.peer_iter.remove_peer(peer_id)
     }
 
+    pub fn add_block(&mut self, peer_id: &PeerId, block: Block) -> Result<BlockMetadata, BlockErr> {
+        self.peer_iter.add_block(peer_id, block)
+    }
+
     /// The bitfield of the client.
     pub fn bitfield(&self) -> &BitField {
         self.peer_iter.bitfield()
@@ -483,7 +515,12 @@ impl<TInner> Torrent<TInner> {
         self.peer_iter.set_client_interest(peer_id, interest)
     }
 
+    /// Update the peer's bitfield.
+    ///
+    /// If the peer is not tracked, a `None` value is returned.
+    /// Otherwise if the `piece_index` was in bounds.
     pub fn on_remote_have(&mut self, peer_id: &PeerId, piece_index: usize) -> Option<bool> {
+        // TODO check current buffer for the new piece
         if let Some(peer) = self.peer_iter.get_peer_mut(peer_id) {
             peer.add_piece(piece_index)
         } else {

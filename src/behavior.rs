@@ -14,7 +14,7 @@ use smallvec::SmallVec;
 use tokio_io::{AsyncRead, AsyncWrite};
 use wasm_timer::Instant;
 
-use crate::disk::block::Block;
+use crate::disk::block::{Block, BlockMetadata};
 use crate::disk::message::DiskMessageOut;
 use crate::peer::piece::PieceBuffer;
 use crate::peer::{BttPeer, InterestType};
@@ -380,7 +380,31 @@ where
 
                 // validate that we can send a block first
             }
-            BittorrentHandlerEvent::GetPieceRes { .. } => {}
+            BittorrentHandlerEvent::GetPieceRes { piece, user_data } => {
+                match self
+                    .torrents
+                    .on_block_response(user_data, &peer_id, piece.into())
+                {
+                    Ok(block_metadata) => {
+                        self.queued_events
+                            .push_back(NetworkBehaviourAction::GenerateEvent(
+                                BittorrentEvent::BlockResult(Ok(BlockOk {
+                                    peer_id,
+                                    block_metadata,
+                                    torrent_id: user_data,
+                                })),
+                            ))
+                    }
+                    Err(err) => {
+                        self.queued_events
+                            .push_back(NetworkBehaviourAction::GenerateEvent(
+                                BittorrentEvent::BlockResult(Err(err)),
+                            ))
+                    }
+                }
+
+                // TODO
+            }
             BittorrentHandlerEvent::CancelPiece { .. } => {}
             BittorrentHandlerEvent::Choke { inner } => {
                 // TODO update the state
@@ -394,7 +418,29 @@ where
                         BittorrentEvent::InterestResult(interest),
                     ))
             }
-            BittorrentHandlerEvent::Have { .. } => {}
+            BittorrentHandlerEvent::Have { index } => {
+                if let Some(valid_piece) = self.torrents.on_have(&peer_id, index as usize) {
+                    if valid_piece {
+                        self.queued_events
+                            .push_back(NetworkBehaviourAction::GenerateEvent(
+                                BittorrentEvent::HaveResult(Ok(HaveOk {
+                                    peer_id,
+                                    piece: index,
+                                })),
+                            ))
+                    } else {
+                        self.queued_events
+                            .push_back(NetworkBehaviourAction::GenerateEvent(
+                                BittorrentEvent::HaveResult(Err(HaveErr::InvalidIndex(index))),
+                            ))
+                    }
+                } else {
+                    self.queued_events
+                        .push_back(NetworkBehaviourAction::GenerateEvent(
+                            BittorrentEvent::HaveResult(Err(HaveErr::NotFound(peer_id))),
+                        ))
+                }
+            }
             BittorrentHandlerEvent::KeepAlive { timestamp } => {
                 self.queued_events
                     .push_back(NetworkBehaviourAction::GenerateEvent(
@@ -488,13 +534,13 @@ where
 /// The events produced by the `Bittorrent` behaviour.
 ///
 /// See [`Bittorrent::poll`].
-#[derive(Debug)]
 pub enum BittorrentEvent {
     HandshakeResult(HandshakeResult),
     BlockResult(BlockResult),
     DiskResult(DiskResult),
     KeepAliveResult(KeepAliveResult),
     InterestResult(InterestResult),
+    HaveResult(HaveResult),
     TorrentFinished { path: PathBuf },
     TorrentSubfileFinished { path: PathBuf },
     AddTorrentSeed { seed: TorrentSeed },
@@ -552,13 +598,42 @@ pub enum InterestOk {
     NotInterested(PeerId),
 }
 
-/// The error result of [`Kademlia::get_closest_peers`].
+/// The result of a `KeepAlive`.
+pub type HaveResult = Result<HaveOk, HaveErr>;
+
 #[derive(Debug, Clone)]
-pub enum InterestedPeerError {
-    Timeout { key: Vec<u8>, peers: Vec<PeerId> },
+pub struct HaveOk {
+    pub peer_id: PeerId,
+    pub piece: u32,
 }
 
-pub type BlockResult = Result<GoodPiece, TorrentError>;
+#[derive(Debug, Clone)]
+pub enum HaveErr {
+    NotFound(PeerId),
+    /// Provided piece index was out of bounds.
+    InvalidIndex(u32),
+}
+
+pub type BlockResult = Result<BlockOk, BlockErr>;
+
+#[derive(Debug, Clone)]
+pub struct BlockOk {
+    pub peer_id: PeerId,
+    pub block_metadata: BlockMetadata,
+    pub torrent_id: TorrentId,
+}
+
+pub enum BlockErr {
+    NotRequested {
+        peer_id: PeerId,
+        block: Block,
+    },
+    InvalidBlock {
+        peer_id: PeerId,
+        expected: BlockMetadata,
+        block: Block,
+    },
+}
 
 /// Message indicating that a good piece has been identified for
 /// the given torrent (hash), as well as the piece index.

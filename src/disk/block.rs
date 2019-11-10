@@ -7,6 +7,7 @@ use futures::Async;
 use crate::disk::error::TorrentError;
 use crate::disk::file::TorrentFileId;
 use crate::disk::fs::FileSystem;
+use crate::piece::Piece;
 use crate::proto::message::PeerRequest;
 use crate::util::{ShaHash, SHA_HASH_LEN};
 
@@ -89,6 +90,15 @@ impl Block {
 impl From<BlockMut> for Block {
     fn from(block: BlockMut) -> Block {
         Block::new(block.metadata(), block.block_data.freeze())
+    }
+}
+
+impl From<Piece> for Block {
+    fn from(piece: Piece) -> Self {
+        Self {
+            metadata: BlockMetadata::new(piece.index as u64, piece.begin as u64, piece.block.len()),
+            block_data: Bytes::from(piece.block),
+        }
     }
 }
 
