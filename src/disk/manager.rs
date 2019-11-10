@@ -11,7 +11,7 @@ use lru_cache::LruCache;
 use tokio_fs::file::{OpenFuture, SeekFuture};
 use tokio_fs::OpenOptions;
 
-use crate::behavior::BittorrentEvent::BlockResult;
+use crate::behavior::BittorrentEvent::LeechBlockResult;
 use crate::disk::block::{
     Block, BlockFileRead, BlockFileWrite, BlockIn, BlockMetadata, BlockMut, BlockRead, BlockWrite,
 };
@@ -56,7 +56,7 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
     }
 
     /// fill a new block from a seed
-    pub fn load_block(&mut self, torrent_id: TorrentId, metadata: BlockMetadata) {
+    pub fn read_block(&mut self, torrent_id: TorrentId, metadata: BlockMetadata) {
         self.queued_events
             .push_back(DiskMessageIn::ReadBlock(torrent_id, metadata));
     }

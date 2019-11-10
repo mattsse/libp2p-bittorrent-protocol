@@ -16,6 +16,7 @@ use crate::bitfield::BitField;
 use crate::disk::block::{Block, BlockMetadata, BlockMut};
 use crate::disk::error::TorrentError;
 use crate::disk::message::DiskMessageIn;
+use crate::handler::BittorrentRequestId;
 use crate::peer::piece::TorrentPieceHandler;
 use crate::peer::{BttPeer, ChokeType, InterestType};
 use crate::piece::{Piece, PieceSelection};
@@ -254,6 +255,19 @@ impl<TInner> TorrentPool<TInner> {
         Err(HandshakeError::InvalidPeer(peer_id, Some(torrent_id)))
     }
 
+    pub fn on_choke_by_remote(
+        &mut self,
+        peer_id: &PeerId,
+        choke: ChokeType,
+    ) -> Option<(TorrentId, ChokeType)> {
+        for torrent in self.torrents.values_mut() {
+            if let Some(choke) = torrent.on_choke_by_remote(peer_id, choke) {
+                return Some((torrent.id(), choke));
+            }
+        }
+        None
+    }
+
     /// Update the peer's latest heartbeat timestamp.
     pub fn on_keep_alive_by_remote(
         &mut self,
@@ -301,19 +315,22 @@ impl<TInner> TorrentPool<TInner> {
     /// Remote want's to leech a block.
     /// We check if the remote is currently tracked and the remote is interested
     /// and not choked and that we own the requested block. If Not a `None`
-    /// value is returned, otherwise the corresponding [`DiskMessageIn`] that
-    /// the Diskmanager needs to read the block.
+    /// value is returned.
     pub fn on_piece_request(
-        &self,
-        peer_id: &PeerId,
-        request: PeerRequest,
-    ) -> Option<DiskMessageIn> {
-        for torrent in self.torrents.values() {
-            if torrent.can_seed_piece_to(peer_id, request.index as usize) {
-                return Some(DiskMessageIn::ReadBlock(torrent.id, request.into()));
+        &mut self,
+        peer_id: PeerId,
+        metadata: BlockMetadata,
+        request_id: BittorrentRequestId,
+    ) -> Result<(TorrentId, BlockMetadata), (PeerId, BlockMetadata, BittorrentRequestId)> {
+        for torrent in self.torrents.values_mut() {
+            if torrent.can_seed_piece_to(&peer_id, metadata.piece_index as usize) {
+                torrent
+                    .piece_handler
+                    .insert_block_seed(peer_id, metadata.clone(), request_id);
+                return Ok((torrent.id, metadata));
             }
         }
-        None
+        Err((peer_id, metadata, request_id))
     }
 
     /// Event handling for a [`BittorrentHandlerEvent::GetPieceRes`].
@@ -568,6 +585,13 @@ impl<TInner> Torrent<TInner> {
         }
     }
 
+    pub fn on_choke_by_remote(&mut self, peer_id: &PeerId, choke: ChokeType) -> Option<ChokeType> {
+        match choke {
+            ChokeType::Choked => self.on_choked_by_remote(peer_id),
+            ChokeType::UnChoked => self.on_unchoked_by_remote(peer_id),
+        }
+    }
+
     pub fn on_choked_by_remote(&mut self, peer_id: &PeerId) -> Option<ChokeType> {
         self.piece_handler
             .set_choke_on_remote(peer_id, ChokeType::Choked)
@@ -613,10 +637,12 @@ impl<TInner> Torrent<TInner> {
     ///
     /// Seeding a piece to the remote is possible, if the remote is interested
     /// and not choked by the client. Also the client has to own the piece in
-    /// the first place.
+    /// the first place and no outstanding requests
     pub fn can_seed_piece_to(&self, peer_id: &PeerId, piece_index: usize) -> bool {
         if let Some(peer) = self.piece_handler.get_peer(peer_id) {
-            self.piece_handler.has_piece(piece_index) && peer.remote_can_leech()
+            self.piece_handler.has_piece(piece_index)
+                && peer.remote_can_leech()
+                && self.piece_handler.is_ready_to_seed_block(peer_id)
         } else {
             false
         }

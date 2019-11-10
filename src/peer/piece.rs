@@ -11,6 +11,7 @@ use crate::behavior::BlockErr;
 use crate::bitfield::BitField;
 use crate::disk::block::{Block, BlockMetadata, BlockMut};
 use crate::disk::error::TorrentError;
+use crate::handler::BittorrentRequestId;
 use crate::peer::torrent::TorrentId;
 use crate::peer::{BttPeer, ChokeType, InterestType};
 use crate::piece::PieceSelection;
@@ -34,6 +35,8 @@ pub struct TorrentPieceHandler {
     selection_strategy: PieceSelection,
     /// Tracks the state of the currently downloaded piece
     piece_buffer: Option<PieceBuffer>,
+    /// Pending read requests
+    pending_seed_blocks: FnvHashMap<PeerId, (BittorrentRequestId, BlockMetadata)>,
     /// Which pieces the client owns and lacks
     bitfield: BitField,
     /// length for a piece in the torrent
@@ -55,6 +58,7 @@ impl TorrentPieceHandler {
             id,
             selection_strategy,
             piece_buffer: None,
+            pending_seed_blocks: Default::default(),
             bitfield,
             piece_length,
             peers: Default::default(),
@@ -151,6 +155,21 @@ impl TorrentPieceHandler {
             }
         }
         peer
+    }
+
+    /// Whether the remote peer can leech a new block, has none pending
+    pub fn is_ready_to_seed_block(&self, peer_id: &PeerId) -> bool {
+        !self.pending_seed_blocks.contains_key(peer_id)
+    }
+
+    pub fn insert_block_seed(
+        &mut self,
+        peer_id: PeerId,
+        block: BlockMetadata,
+        request_id: BittorrentRequestId,
+    ) {
+        self.pending_seed_blocks
+            .insert(peer_id, (request_id, block));
     }
 
     /// Returns the `BttPeer` that's tracked with the `PeerId`
