@@ -47,7 +47,7 @@ pub struct BttPeer {
     /// The peer's bittorrent id
     pub peer_btt_id: ShaHash,
     /// What pieces this peers owns or lacks
-    pub piece_field: Option<BitField>,
+    pub bitfield: Option<BitField>,
     /// History of send/receive statistics
     pub stats: PeerStats,
     /// How the remote treats requests made by the client.
@@ -67,7 +67,7 @@ pub struct BttPeer {
 impl BttPeer {
     pub fn new<T: Into<ShaHash>>(peer_btt_id: T) -> Self {
         Self {
-            piece_field: None,
+            bitfield: None,
             peer_btt_id: peer_btt_id.into(),
             stats: Default::default(),
             remote_choke: Default::default(),
@@ -81,7 +81,7 @@ impl BttPeer {
 
     pub fn new_with_bitfield<T: Into<ShaHash>>(peer_btt_id: T, piece_field: BitField) -> Self {
         Self {
-            piece_field: Some(piece_field),
+            bitfield: Some(piece_field),
             peer_btt_id: peer_btt_id.into(),
             stats: Default::default(),
             remote_choke: Default::default(),
@@ -93,14 +93,30 @@ impl BttPeer {
         }
     }
 
+    /// Whether this peer has pieces that the other bitfield is lacking.
+    pub fn is_having_missing_pieces_for(&self, other: &BitField) -> bool {
+        if let Some(bitfield) = &self.bitfield {
+            if bitfield.len() != other.len() {
+                return false;
+            }
+            for (i, bit) in bitfield.iter().enumerate() {
+                if bit && !other.get(i).unwrap() {
+                    return true;
+                }
+            }
+            return false;
+        }
+        false
+    }
+
     /// Whether the Peer already sent its bitfield
     pub fn has_bitfield(&self) -> bool {
-        self.piece_field.is_some()
+        self.bitfield.is_some()
     }
 
     /// Whether the piece is owned by the peer
     pub fn has_piece(&self, piece_index: usize) -> Option<bool> {
-        if let Some(field) = &self.piece_field {
+        if let Some(field) = &self.bitfield {
             field.get(piece_index)
         } else {
             None
@@ -171,7 +187,7 @@ impl BttPeer {
     /// If no bitfield is available `None` is returned, otherwise if the
     /// requested `piece_index` is in bounds.
     pub fn add_piece(&mut self, piece_index: usize) -> Option<bool> {
-        if let Some(have) = &mut self.piece_field {
+        if let Some(have) = &mut self.bitfield {
             if piece_index < have.len() {
                 have.set(piece_index, true);
                 Some(true)
@@ -185,8 +201,8 @@ impl BttPeer {
 
     /// Sets the Peer's bitfield and returns if there was already one set.
     pub fn set_bitfield(&mut self, bitfield: BitField) -> Option<BitField> {
-        let field = self.piece_field.take();
-        self.piece_field = Some(bitfield);
+        let field = self.bitfield.take();
+        self.bitfield = Some(bitfield);
         field
     }
 
@@ -194,7 +210,7 @@ impl BttPeer {
     /// If no bitfield is available `None` is returned, otherwise a `Ok` if the
     /// requested `piece_index` is in bounds.
     pub fn remove_piece(&mut self, piece_index: usize) -> Option<Result<(), ()>> {
-        if let Some(have) = &mut self.piece_field {
+        if let Some(have) = &mut self.bitfield {
             if piece_index < have.len() {
                 have.set(piece_index, false);
                 Some(Ok(()))

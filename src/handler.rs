@@ -55,18 +55,18 @@ where
     /// Create a `BittorrentHandler` that only allows leeching from remote but
     /// denying incoming piece request.
     pub fn leech_only() -> Self {
-        BittorrentHandler::with_seed_leech_config(SeedLeechConfig::Leech)
+        BittorrentHandler::with_seed_leech_config(SeedLeechConfig::LeechOnly)
     }
 
     /// Create a `BittorrentHandler` that only allows seeding to remotes but
     /// doesn't request any pieces.
     pub fn seed_only() -> Self {
-        BittorrentHandler::with_seed_leech_config(SeedLeechConfig::Seed)
+        BittorrentHandler::with_seed_leech_config(SeedLeechConfig::SeedOnly)
     }
 
     /// Create a `BittorrentHandler` that seeds and also leeches.
     pub fn seed_and_leech() -> Self {
-        BittorrentHandler::with_seed_leech_config(SeedLeechConfig::Both)
+        BittorrentHandler::with_seed_leech_config(SeedLeechConfig::SeedAndLeech)
     }
 
     pub fn with_seed_leech_config(seed_leech: SeedLeechConfig) -> Self {
