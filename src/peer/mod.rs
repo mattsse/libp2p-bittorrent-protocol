@@ -7,6 +7,8 @@ use crate::util::ShaHash;
 pub mod piece;
 pub mod torrent;
 
+pub use torrent::TorrentState;
+
 /// Status of our connection to a node reported by the BitTorrent protocol.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum ChokeType {

@@ -59,11 +59,7 @@ where
 {
     /// Creates a new `Bittorrent` network behaviour with the given
     /// configuration.
-    pub fn with_config<T: Into<TFileSystem>>(
-        peer_id: PeerId,
-        filesystem: T,
-        config: BittorrentConfig,
-    ) -> Self {
+    pub fn with_config(peer_id: PeerId, filesystem: TFileSystem, config: BittorrentConfig) -> Self {
         Self {
             disk_manager: DiskManager::with_capacity(filesystem.into(), 100),
             torrents: TorrentPool::new(peer_id, config),
@@ -74,16 +70,26 @@ where
     }
 
     /// start handshaking with a peer for specific torrent
-    pub fn handshake(&mut self, info_hash: ShaHash, peer: TorrentPeer) {
+    pub fn handshake<T: Into<ShaHash>>(&mut self, info_hash: T, peer_id: PeerId) {
         // TODO candidate identification should be a DHT lookup
-        self.queued_events
-            .push_back(NetworkBehaviourAction::SendEvent {
-                peer_id: peer.peer_id,
-                event: BittorrentHandlerIn::HandshakeReq {
-                    handshake: Handshake::new(info_hash, self.torrents.local_peer_hash.clone()),
-                    user_data: peer.torrent_id,
-                },
-            });
+        let info_hash = info_hash.into();
+        if let Some(torrent) = self.torrents.get_for_info_hash(&info_hash) {
+            self.queued_events
+                .push_back(NetworkBehaviourAction::SendEvent {
+                    peer_id,
+                    event: BittorrentHandlerIn::HandshakeReq {
+                        handshake: Handshake::new(info_hash, self.torrents.local_peer_hash.clone()),
+                        user_data: torrent.id(),
+                    },
+                });
+        } else {
+            self.queued_events
+                .push_back(NetworkBehaviourAction::GenerateEvent(
+                    BittorrentEvent::HandshakeResult(Err(HandshakeError::InfoHashNotFound(
+                        peer_id, info_hash,
+                    ))),
+                ))
+        }
     }
 
     pub fn choke_peer(&mut self, peer_id: &PeerId) {
@@ -95,8 +101,34 @@ where
     }
 
     /// Add a new torrent to leech from peers
-    pub fn add_leech<T: AsRef<ShaHash>>(&mut self, metainfo: MetaInfo, peers: PeerId) {
-        unimplemented!()
+    pub fn add_leech(&mut self, leech: MetaInfo, state: TorrentState) {
+        let bitfield = BitField::new_all_clear(leech.info.pieces.len());
+        match self.torrents.add_leech(
+            leech.info_hash.clone(),
+            bitfield,
+            leech.info.piece_length,
+            Default::default(),
+            state,
+        ) {
+            Ok((id, actual_state)) => {
+                self.queued_events
+                    .push_back(NetworkBehaviourAction::GenerateEvent(
+                        BittorrentEvent::TorrentAddedResult(Ok(TorrentAddedOk::NewLeech {
+                            id,
+                            state: actual_state,
+                        })),
+                    ));
+                self.disk_manager.add_torrent(id, leech)
+            }
+            Err(info_hash) => self
+                .queued_events
+                .push_back(NetworkBehaviourAction::GenerateEvent(
+                    BittorrentEvent::TorrentAddedResult(Err(TorrentAddedErr::AlreadyExist {
+                        info_hash,
+                        meta_info: leech,
+                    })),
+                )),
+        }
     }
 
     pub fn try_start_new_seed(&mut self, seed: TorrentSeed) {
@@ -115,7 +147,6 @@ where
     /// Add a new torrent as seed .
     pub fn add_seed(&mut self, seed: TorrentSeed, state: TorrentState) {
         let bitfield = BitField::new_all_set(seed.torrent.info.pieces.len());
-
         match self.torrents.add_seed(
             seed.torrent.info_hash.clone(),
             bitfield,
@@ -526,23 +557,6 @@ where
         let now = Instant::now();
 
         loop {
-            // drain pending disk io
-            match self.disk_manager.poll() {
-                Ok(Async::Ready(event)) => {
-                    return Async::Ready(NetworkBehaviourAction::GenerateEvent(
-                        BittorrentEvent::DiskResult(Ok(event)),
-                    ));
-                }
-                Err(err) => {
-                    return Async::Ready(NetworkBehaviourAction::GenerateEvent(
-                        BittorrentEvent::DiskResult(Err(())),
-                    ));
-                }
-                _ => {
-                    return Async::NotReady;
-                }
-            };
-
             // Drain queued events.
             if let Some(event) = self.queued_events.pop_front() {
                 return Async::Ready(event);
@@ -574,11 +588,28 @@ where
                         });
                     }
                     TorrentPoolState::Waiting(torrent) => {
-                        continue;
+                        break;
                     }
-                    TorrentPoolState::Idle => continue,
+                    TorrentPoolState::Idle => break,
                     _ => {}
                 }
+
+                // drain pending disk io
+                match self.disk_manager.poll() {
+                    Ok(Async::Ready(event)) => {
+                        return Async::Ready(NetworkBehaviourAction::GenerateEvent(
+                            BittorrentEvent::DiskResult(Ok(event)),
+                        ));
+                    }
+                    Err(err) => {
+                        return Async::Ready(NetworkBehaviourAction::GenerateEvent(
+                            BittorrentEvent::DiskResult(Err(())),
+                        ));
+                    }
+                    _ => {
+                        return Async::NotReady;
+                    }
+                };
             }
 
             // No immediate event was produced as a result of a finished bittorrent.
@@ -623,6 +654,7 @@ pub struct HandshakeOk(pub PeerId);
 #[derive(Debug, Clone)]
 pub enum HandshakeError {
     InfoHashMismatch(PeerId, Option<TorrentId>),
+    InfoHashNotFound(PeerId, ShaHash),
     InvalidPeer(PeerId, Option<TorrentId>),
     Timeout(PeerId),
 }
