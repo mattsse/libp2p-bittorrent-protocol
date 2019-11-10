@@ -14,9 +14,11 @@ use smallvec::SmallVec;
 use tokio_io::{AsyncRead, AsyncWrite};
 use wasm_timer::Instant;
 
+use crate::bitfield::BitField;
 use crate::disk::block::{Block, BlockMetadata};
 use crate::disk::message::DiskMessageOut;
 use crate::peer::piece::PieceBuffer;
+use crate::peer::torrent::TorrentState;
 use crate::peer::{BttPeer, InterestType};
 use crate::proto::message::Handshake;
 use crate::{
@@ -97,9 +99,49 @@ where
         unimplemented!()
     }
 
-    /// Add a new torrent as seed.
-    pub fn add_seed(&mut self, seed: TorrentSeed) {
-        unimplemented!()
+    pub fn try_start_new_seed(&mut self, seed: TorrentSeed) {
+        //        let bitfield =
+        // BitField::new_all_set(seed.torrent.info.pieces.len());
+        //
+        //        let id = self.torrents.try_start_new_seed(
+        //            seed.torrent.info_hash.clone(),
+        //            bitfield,
+        //            seed.torrent.info.piece_length,
+        //            Default::default(),
+        //        );
+        //        self.disk_manager.add_torrent(id, )
+    }
+
+    /// Add a new torrent as seed .
+    pub fn add_seed(&mut self, seed: TorrentSeed, state: TorrentState) {
+        let bitfield = BitField::new_all_set(seed.torrent.info.pieces.len());
+
+        match self.torrents.add_seed(
+            seed.torrent.info_hash.clone(),
+            bitfield,
+            seed.torrent.info.piece_length,
+            Default::default(),
+            state,
+        ) {
+            Ok((id, actual_state)) => {
+                self.queued_events
+                    .push_back(NetworkBehaviourAction::GenerateEvent(
+                        BittorrentEvent::TorrentAddedResult(Ok(TorrentAddedOk::NewSeed {
+                            id,
+                            state: actual_state,
+                        })),
+                    ));
+                self.disk_manager.add_torrent(id, seed.torrent)
+            }
+            Err(info_hash) => self
+                .queued_events
+                .push_back(NetworkBehaviourAction::GenerateEvent(
+                    BittorrentEvent::TorrentAddedResult(Err(TorrentAddedErr::AlreadyExist {
+                        info_hash,
+                        meta_info: seed.torrent,
+                    })),
+                )),
+        }
     }
 
     pub fn remove_torrent(&mut self, info_hash: &ShaHash) {
@@ -128,18 +170,6 @@ where
         unimplemented!()
     }
 
-    /// Handles a peer that failed to send a `KeepAlive`.
-    fn send_keepalive(&mut self, peer_id: PeerId, peer: &mut BttPeer) {
-        self.queued_events
-            .push_back(NetworkBehaviourAction::SendEvent {
-                peer_id,
-                event: BittorrentHandlerIn::KeepAlive,
-            });
-    }
-
-    /// update the keep alive status of the torrent
-    fn update_keep_alive(&mut self, peer_id: &PeerId, timestamp: Instant) {}
-
     /// Handles a block for a specific torrent
     fn block_ready(&mut self, torrent_id: TorrentId, buffer: Block) -> Option<BittorrentEvent> {
         unimplemented!()
@@ -151,15 +181,6 @@ where
         //            }
         //            Err(err) => Some(BittorrentEvent::BlockResult(Err(err))),
         //        }
-    }
-
-    /// Handles a finished (i.e. successful) piece.
-    fn piece_finished(
-        &mut self,
-        torrent: Torrent<TorrentInner>,
-        params: &mut impl PollParameters,
-    ) -> Option<BittorrentEvent> {
-        unimplemented!()
     }
 
     /// Gets a mutable reference to the disk manager.
@@ -402,8 +423,6 @@ where
                             ))
                     }
                 }
-
-                // TODO
             }
             BittorrentHandlerEvent::CancelPiece { .. } => {}
             BittorrentHandlerEvent::Choke { inner } => {
@@ -543,7 +562,7 @@ pub enum BittorrentEvent {
     HaveResult(HaveResult),
     TorrentFinished { path: PathBuf },
     TorrentSubfileFinished { path: PathBuf },
-    AddTorrentSeed { seed: TorrentSeed },
+    TorrentAddedResult(TorrentAddedResult),
     AddTorrentLeech { meta: MetaInfo },
 }
 
@@ -635,6 +654,22 @@ pub enum BlockErr {
     },
 }
 
+pub type TorrentAddedResult = Result<TorrentAddedOk, TorrentAddedErr>;
+
+#[derive(Debug, Clone)]
+pub enum TorrentAddedOk {
+    NewSeed { id: TorrentId, state: TorrentState },
+    NewLeech { id: TorrentId, state: TorrentState },
+}
+
+#[derive(Debug, Clone)]
+pub enum TorrentAddedErr {
+    AlreadyExist {
+        info_hash: ShaHash,
+        meta_info: MetaInfo,
+    },
+}
+
 /// Message indicating that a good piece has been identified for
 /// the given torrent (hash), as well as the piece index.
 #[derive(Debug, Clone)]
@@ -687,9 +722,11 @@ impl Default for SeedLeechConfig {
 }
 
 /// Internal piece state
+#[derive(Debug, Clone, Default)]
 struct TorrentInner {
     /// The piece-specific state.
     info: TorrentInfo,
 }
 
+#[derive(Debug, Clone, Default)]
 pub struct TorrentInfo {}

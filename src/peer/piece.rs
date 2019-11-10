@@ -14,7 +14,6 @@ use crate::disk::error::TorrentError;
 use crate::peer::torrent::TorrentId;
 use crate::peer::{BttPeer, ChokeType, InterestType};
 use crate::piece::PieceSelection;
-use log::Metadata;
 
 /// Tracks the progress of the handler
 #[derive(Debug)]
@@ -36,7 +35,7 @@ pub struct TorrentPieceHandler {
     /// Tracks the state of the currently downloaded piece
     piece_buffer: Option<PieceBuffer>,
     /// Which pieces the client owns and lacks
-    have: BitField,
+    bitfield: BitField,
     /// length for a piece in the torrent
     piece_length: u64,
     /// All the peers related to the torrent.
@@ -46,6 +45,23 @@ pub struct TorrentPieceHandler {
 }
 
 impl TorrentPieceHandler {
+    pub fn new(
+        id: TorrentId,
+        selection_strategy: PieceSelection,
+        bitfield: BitField,
+        piece_length: u64,
+    ) -> Self {
+        Self {
+            id,
+            selection_strategy,
+            piece_buffer: None,
+            bitfield,
+            piece_length,
+            peers: Default::default(),
+            endgame: false,
+        }
+    }
+
     /// Add a new peer for the torrent.
     pub fn insert_peer(&mut self, id: PeerId, peer: BttPeer) -> Option<BttPeer> {
         if let Some(buffer) = &mut self.piece_buffer {
@@ -61,7 +77,7 @@ impl TorrentPieceHandler {
     }
 
     pub fn bitfield(&self) -> &BitField {
-        &self.have
+        &self.bitfield
     }
 
     pub fn set_client_choke_for_peer(
@@ -124,7 +140,7 @@ impl TorrentPieceHandler {
 
     /// Whether the piece was already downloaded
     pub fn has_piece(&self, piece_index: usize) -> bool {
-        self.have.get(piece_index).unwrap_or_default()
+        self.bitfield.get(piece_index).unwrap_or_default()
     }
 
     pub fn remove_peer(&mut self, id: &PeerId) -> Option<BttPeer> {
@@ -190,8 +206,8 @@ impl TorrentPieceHandler {
             if peer.has_bitfield() {
                 peer.add_piece(piece_index)
             } else {
-                if piece_index < self.have.len() {
-                    let mut field = self.have.clone();
+                if piece_index < self.bitfield.len() {
+                    let mut field = self.bitfield.clone();
                     field.clear();
                     field.set(piece_index, true);
                     peer.set_bitfield(field);
@@ -209,8 +225,8 @@ impl TorrentPieceHandler {
     ///
     /// If the piece_index is out of bounds a error value is returned.
     pub fn add_piece(&mut self, piece_index: usize) -> Result<(), ()> {
-        if piece_index < self.have.len() {
-            self.have.set(piece_index, true);
+        if piece_index < self.bitfield.len() {
+            self.bitfield.set(piece_index, true);
             Ok(())
         } else {
             Err(())
@@ -221,8 +237,8 @@ impl TorrentPieceHandler {
     ///
     /// If the piece_index is out of bounds a error value is returned.
     pub fn remove_piece(&mut self, piece_index: usize) -> Result<(), ()> {
-        if piece_index < self.have.len() {
-            self.have.set(piece_index, false);
+        if piece_index < self.bitfield.len() {
+            self.bitfield.set(piece_index, false);
             Ok(())
         } else {
             Err(())
@@ -241,7 +257,7 @@ impl TorrentPieceHandler {
 
     /// All piece indices that are still missing
     fn missing_piece_indices(&self) -> Vec<usize> {
-        self.have
+        self.bitfield
             .iter()
             .enumerate()
             .filter(|(index, bit)| !*bit)

@@ -67,18 +67,14 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
         if let Some(file) = self.torrents.take(&id) {
             DiskMessageOut::TorrentRemoved(id, file.meta_info)
         } else {
-            DiskMessageOut::TorrentError(id.clone(), TorrentError::TorrentNotFound { id })
+            DiskMessageOut::TorrentError(id, TorrentError::TorrentNotFound { id })
         }
     }
 
     /// stores a new torrent
-    fn add_torrent(&mut self, id: TorrentId, meta: MetaInfo) -> DiskMessageOut {
-        if self.torrents.contains(&id) {
-            DiskMessageOut::TorrentError(id, TorrentError::ExistingTorrent { meta })
-        } else {
-            self.torrents.insert(TorrentFile::new(id.clone(), meta));
-            DiskMessageOut::TorrentAdded(id)
-        }
+    pub fn add_torrent(&mut self, id: TorrentId, meta: MetaInfo) {
+        self.queued_events
+            .push_back(DiskMessageIn::AddTorrent(id, meta))
     }
 
     fn sync_torrent(&mut self, id: TorrentId) {
@@ -205,7 +201,14 @@ impl<TFileSystem: FileSystem> Future for DiskManager<TFileSystem> {
             if let Some(msg) = self.queued_events.pop_front() {
                 match msg {
                     DiskMessageIn::AddTorrent(id, meta) => {
-                        return Ok(Async::Ready(self.add_torrent(id, meta)));
+                        let msg = if self.torrents.contains(&id) {
+                            DiskMessageOut::TorrentError(id, TorrentError::ExistingTorrent { meta })
+                        } else {
+                            self.torrents.insert(TorrentFile::new(id, meta));
+                            DiskMessageOut::TorrentAdded(id)
+                        };
+
+                        return Ok(Async::Ready(msg));
                     }
                     DiskMessageIn::RemoveTorrent(id) => {
                         return Ok(Async::Ready(self.remove_torrent(id)));

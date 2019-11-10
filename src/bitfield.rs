@@ -25,6 +25,16 @@ impl BitField {
             inner: BitVec::from_bytes(bytes),
         }
     }
+
+    /// Create a new `Bitfield` with `nbits` bits all set to true.
+    pub fn new_all_set(nbits: usize) -> Self {
+        BitVec::from_elem(nbits, true).into()
+    }
+
+    /// Create a new `Bitfield` with `nbits` bits all set to false.
+    pub fn new_all_clear(nbits: usize) -> Self {
+        BitVec::from_elem(nbits, false).into()
+    }
 }
 
 impl<T: Into<BitVec>> From<T> for BitField {

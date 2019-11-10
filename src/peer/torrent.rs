@@ -40,7 +40,7 @@ pub struct TorrentPool<TInner> {
     /// Move finished downloads to another folder
     move_completed_downloads: Option<PathBuf>,
     /// How the initial pieces to download are selected
-    initial_piece_selection: PieceSelection,
+    initial_piece_selection_strategy: PieceSelection,
     /// Next unique Identifier of a torrent.
     next_unique_torrent: usize,
 }
@@ -83,16 +83,87 @@ impl<TInner> TorrentPool<TInner> {
             max_simultaneous_downloads,
             max_active_torrents,
             move_completed_downloads: config.move_completed_downloads,
-            initial_piece_selection: config.initial_piece_selection.unwrap_or_default(),
+            initial_piece_selection_strategy: config.initial_piece_selection.unwrap_or_default(),
             next_unique_torrent: 0,
         }
+    }
+
+    pub fn try_start_new_seed<T: Into<ShaHash>>(
+        &mut self,
+        info_hash: T,
+        bitfield: BitField,
+        piece_length: u64,
+        inner: TInner,
+    ) -> Result<Result<TorrentId, TorrentId>, ShaHash> {
+        let (id, state) = self.add_seed(
+            info_hash,
+            bitfield,
+            piece_length,
+            inner,
+            TorrentState::Active,
+        )?;
+        if state.is_active() {
+            Ok(Ok(id))
+        } else {
+            Ok(Err(id))
+        }
+    }
+
+    /// Creates a new `Torrent` with a new id in [`SeedLeechConfig::SeedOnly`]
+    /// mode.
+    pub fn add_seed<T: Into<ShaHash>>(
+        &mut self,
+        info_hash: T,
+        bitfield: BitField,
+        piece_length: u64,
+        inner: TInner,
+        state: TorrentState,
+    ) -> Result<(TorrentId, TorrentState), ShaHash> {
+        let info_hash = info_hash.into();
+
+        if self.torrents.values().any(|x| x.info_hash == info_hash) {
+            return Err(info_hash);
+        }
+
+        let state = if state.is_active() {
+            if self.iter_active().count() < self.max_active_torrents {
+                TorrentState::Active
+            } else {
+                TorrentState::Paused
+            }
+        } else {
+            state
+        };
+
+        let id = TorrentId(self.next_unique_torrent);
+        self.next_unique_torrent += 1;
+        let torrent = Torrent::new(
+            id,
+            info_hash,
+            TorrentPieceHandler::new(
+                id,
+                self.initial_piece_selection_strategy,
+                bitfield,
+                piece_length,
+            ),
+            inner,
+            SeedLeechConfig::SeedOnly,
+            state,
+        );
+
+        self.torrents.insert(id, torrent);
+        Ok((id, state))
+    }
+
+    fn iter_active(&self) -> impl Iterator<Item = &Torrent<TInner>> {
+        self.torrents.values().filter(|x| x.is_active())
     }
 
     /// Whether the remote can contribute to the torrent's completion
     pub fn is_remote_interesting(&self, torrent_id: TorrentId, peer_id: &PeerId) -> bool {
         if let Some(torrent) = self.torrents.get(&torrent_id) {
             if torrent.seed_leech().is_leeching() {
-                if let Some(peer) = torrent.peer_iter.get_peer(peer_id) {
+                if let Some(peer) = torrent.piece_handler.get_peer(peer_id) {
                     return peer.is_having_missing_pieces_for(torrent.bitfield());
                 }
             }
@@ -155,7 +226,7 @@ impl<TInner> TorrentPool<TInner> {
         if let Some(torrent) = self.get_for_info_hash_mut(&handshake.info_hash) {
             let peer = BttPeer::new(handshake.peer_id);
             // begin tracking the peer
-            torrent.peer_iter.insert_peer(peer_id, peer);
+            torrent.piece_handler.insert_peer(peer_id, peer);
             return Ok(Handshake::new(handshake.info_hash, self.local_peer_hash));
         }
         Err(HandshakeError::InfoHashMismatch(peer_id, None))
@@ -175,7 +246,7 @@ impl<TInner> TorrentPool<TInner> {
         if let Some(torrent) = self.torrents.get_mut(&torrent_id) {
             if torrent.info_hash == handshake.info_hash {
                 let peer = BttPeer::new(handshake.peer_id);
-                torrent.peer_iter.insert_peer(peer_id.clone(), peer);
+                torrent.piece_handler.insert_peer(peer_id.clone(), peer);
                 return Ok((HandshakeOk(peer_id), torrent.bitfield().clone()));
             }
             return Err(HandshakeError::InfoHashMismatch(peer_id, Some(torrent_id)));
@@ -285,7 +356,7 @@ impl<TInner> TorrentPool<TInner> {
         bitfield: BitField,
     ) -> bool {
         if let Some(torrent) = self.torrents.get_mut(&torrent_id) {
-            if let Some(peer) = torrent.peer_iter.get_peer_mut(peer_id) {
+            if let Some(peer) = torrent.piece_handler.get_peer_mut(peer_id) {
                 peer.set_bitfield(bitfield);
                 return true;
             }
@@ -298,8 +369,8 @@ impl<TInner> TorrentPool<TInner> {
     /// A `None` should result in dropping the connection
     pub fn get_bitfield(&self, peer_id: &PeerId) -> Option<BitField> {
         for torrent in self.torrents.values() {
-            if torrent.peer_iter.peers.contains_key(peer_id) {
-                return Some(torrent.peer_iter.bitfield().clone());
+            if torrent.piece_handler.peers.contains_key(peer_id) {
+                return Some(torrent.piece_handler.bitfield().clone());
             }
         }
         None
@@ -326,17 +397,6 @@ impl<TInner> TorrentPool<TInner> {
     /// Returns an iterator over mutable torrents in the pool.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Torrent<TInner>> {
         self.torrents.values_mut()
-    }
-
-    /// returns all peers that are currently related to the torrents hash
-    pub fn iter_active_peers<'a>(
-        &'a self,
-        info_hash: &'a ShaHash,
-    ) -> impl Iterator<Item = &'a PeerId> + 'a {
-        self.torrents
-            .values()
-            .filter(move |torrent| torrent.info_hash == *info_hash)
-            .flat_map(Torrent::iter_peer_ids)
     }
 
     /// returns all peers that are currently not related to the info hash
@@ -371,7 +431,7 @@ impl<TInner> TorrentPool<TInner> {
     pub fn iter_leeching(&self) -> impl Iterator<Item = &Torrent<TInner>> {
         self.torrents
             .values()
-            .filter(|torrent| torrent.state != SeedLeechConfig::SeedOnly)
+            .filter(|torrent| torrent.seed_leech != SeedLeechConfig::SeedOnly)
     }
 
     pub fn iter_leeching_from(&self) -> impl Iterator<Item = &PeerId> {
@@ -382,7 +442,7 @@ impl<TInner> TorrentPool<TInner> {
     pub fn iter_seeding(&self) -> impl Iterator<Item = &Torrent<TInner>> {
         self.torrents
             .values()
-            .filter(|torrent| torrent.state != SeedLeechConfig::LeechOnly)
+            .filter(|torrent| torrent.seed_leech != SeedLeechConfig::LeechOnly)
     }
 
     pub fn iter_seeding_to(&self) -> impl Iterator<Item = &PeerId> {
@@ -393,7 +453,7 @@ impl<TInner> TorrentPool<TInner> {
     pub fn iter_complete_seeds(&self) -> impl Iterator<Item = &Torrent<TInner>> {
         self.torrents
             .values()
-            .filter(|torrent| torrent.state == SeedLeechConfig::SeedOnly)
+            .filter(|torrent| torrent.seed_leech == SeedLeechConfig::SeedOnly)
     }
 
     /// Returns a mutablereference to a torrent with the given ID, if it is in
@@ -414,41 +474,62 @@ pub struct Torrent<TInner> {
     /// the info hash of the torrent file, this is how torrents are identified
     pub info_hash: ShaHash,
     /// The peer iterator that drives the torrent's piece state.
-    peer_iter: TorrentPieceHandler,
-    /// The instant when the torrent started (i.e. began waiting for the first
-    /// result from a peer).
-    started: Instant,
+    piece_handler: TorrentPieceHandler,
+    /// The instant when the torrent was created.
+    created: Instant,
     /// The opaque inner state.
     pub inner: TInner,
     /// The state of how the torrent should send/receive blocks
-    state: SeedLeechConfig,
+    seed_leech: SeedLeechConfig,
+    /// State of torrent's capability to download/upload
+    state: TorrentState,
 }
 
 impl<TInner> Torrent<TInner> {
+    // TODO add Builder
+    pub fn new(
+        id: TorrentId,
+        info_hash: ShaHash,
+        piece_handler: TorrentPieceHandler,
+        inner: TInner,
+        seed_leech: SeedLeechConfig,
+        state: TorrentState,
+    ) -> Self {
+        Self {
+            id,
+            info_hash,
+            piece_handler,
+            created: Instant::now(),
+            inner,
+            seed_leech,
+            state,
+        }
+    }
+
     /// Gets the unique ID of the torrent.
     pub fn id(&self) -> TorrentId {
         self.id
     }
 
     pub fn iter_peer_ids(&self) -> impl Iterator<Item = &PeerId> {
-        self.peer_iter.peers.keys()
+        self.piece_handler.peers.keys()
     }
 
     pub fn iter_peers(&self) -> impl Iterator<Item = &BttPeer> {
-        self.peer_iter.peers.values()
+        self.piece_handler.peers.values()
     }
 
     pub fn remove_peer(&mut self, peer_id: &PeerId) -> Option<BttPeer> {
-        self.peer_iter.remove_peer(peer_id)
+        self.piece_handler.remove_peer(peer_id)
     }
 
     pub fn add_block(&mut self, peer_id: &PeerId, block: Block) -> Result<BlockMetadata, BlockErr> {
-        self.peer_iter.add_block(peer_id, block)
+        self.piece_handler.add_block(peer_id, block)
     }
 
     /// The bitfield of the client.
     pub fn bitfield(&self) -> &BitField {
-        self.peer_iter.bitfield()
+        self.piece_handler.bitfield()
     }
 
     pub fn poll(&mut self, now: Instant) -> TorrentPoolState<TInner> {
@@ -461,7 +542,7 @@ impl<TInner> Torrent<TInner> {
         peer_id: &PeerId,
         heartbeat: &Instant,
     ) -> Option<Instant> {
-        if let Some(peer) = self.peer_iter.get_peer_mut(peer_id) {
+        if let Some(peer) = self.piece_handler.get_peer_mut(peer_id) {
             Some(std::mem::replace(
                 &mut peer.remote_heartbeat,
                 heartbeat.to_owned(),
@@ -477,7 +558,7 @@ impl<TInner> Torrent<TInner> {
         peer_id: &PeerId,
         heartbeat: &Instant,
     ) -> Option<Instant> {
-        if let Some(peer) = self.peer_iter.get_peer_mut(peer_id) {
+        if let Some(peer) = self.piece_handler.get_peer_mut(peer_id) {
             Some(std::mem::replace(
                 &mut peer.client_heartbeat,
                 heartbeat.to_owned(),
@@ -488,22 +569,22 @@ impl<TInner> Torrent<TInner> {
     }
 
     pub fn on_choked_by_remote(&mut self, peer_id: &PeerId) -> Option<ChokeType> {
-        self.peer_iter
+        self.piece_handler
             .set_choke_on_remote(peer_id, ChokeType::Choked)
     }
 
     pub fn on_unchoked_by_remote(&mut self, peer_id: &PeerId) -> Option<ChokeType> {
-        self.peer_iter
+        self.piece_handler
             .set_choke_on_remote(peer_id, ChokeType::UnChoked)
     }
 
     pub fn on_remote_interested(&mut self, peer_id: &PeerId) -> Option<InterestType> {
-        self.peer_iter
+        self.piece_handler
             .set_interest_on_remote(peer_id, InterestType::Interested)
     }
 
     pub fn on_remote_not_interested(&mut self, peer_id: &PeerId) -> Option<InterestType> {
-        self.peer_iter
+        self.piece_handler
             .set_interest_on_remote(peer_id, InterestType::NotInterested)
     }
 
@@ -512,7 +593,7 @@ impl<TInner> Torrent<TInner> {
         peer_id: &PeerId,
         interest: InterestType,
     ) -> Option<InterestType> {
-        self.peer_iter.set_client_interest(peer_id, interest)
+        self.piece_handler.set_client_interest(peer_id, interest)
     }
 
     /// Update the peer's bitfield.
@@ -521,7 +602,7 @@ impl<TInner> Torrent<TInner> {
     /// Otherwise if the `piece_index` was in bounds.
     pub fn on_remote_have(&mut self, peer_id: &PeerId, piece_index: usize) -> Option<bool> {
         // TODO check current buffer for the new piece
-        if let Some(peer) = self.peer_iter.get_peer_mut(peer_id) {
+        if let Some(peer) = self.piece_handler.get_peer_mut(peer_id) {
             peer.add_piece(piece_index)
         } else {
             None
@@ -534,8 +615,8 @@ impl<TInner> Torrent<TInner> {
     /// and not choked by the client. Also the client has to own the piece in
     /// the first place.
     pub fn can_seed_piece_to(&self, peer_id: &PeerId, piece_index: usize) -> bool {
-        if let Some(peer) = self.peer_iter.get_peer(peer_id) {
-            self.peer_iter.has_piece(piece_index) && peer.remote_can_leech()
+        if let Some(peer) = self.piece_handler.get_peer(peer_id) {
+            self.piece_handler.has_piece(piece_index) && peer.remote_can_leech()
         } else {
             false
         }
@@ -547,7 +628,7 @@ impl<TInner> Torrent<TInner> {
     /// piece, the client is interested to download and currently not choked by
     /// the remote.
     pub fn can_leech_piece_from(&self, peer_id: &PeerId, piece_index: usize) -> bool {
-        if let Some(peer) = self.peer_iter.get_peer(peer_id) {
+        if let Some(peer) = self.piece_handler.get_peer(peer_id) {
             peer.remote_can_seed_piece(piece_index)
         } else {
             false
@@ -556,11 +637,57 @@ impl<TInner> Torrent<TInner> {
 
     /// If the peer is currently tracked by this torrent.
     pub fn contains_peer(&self, peer_id: &PeerId) -> bool {
-        self.peer_iter.peers.contains_key(peer_id)
+        self.piece_handler.peers.contains_key(peer_id)
     }
 
     pub fn seed_leech(&self) -> &SeedLeechConfig {
-        &self.state
+        &self.seed_leech
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.state.is_active()
+    }
+    pub fn is_paused(&self) -> bool {
+        self.state.is_paused()
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        self.state.is_stopped()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TorrentState {
+    Active,
+    Paused,
+    Stopped,
+}
+
+impl TorrentState {
+    pub fn is_active(&self) -> bool {
+        match self {
+            TorrentState::Active => true,
+            _ => false,
+        }
+    }
+    pub fn is_paused(&self) -> bool {
+        match self {
+            TorrentState::Paused => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        match self {
+            TorrentState::Stopped => true,
+            _ => false,
+        }
+    }
+}
+
+impl Default for TorrentState {
+    fn default() -> Self {
+        TorrentState::Paused
     }
 }
 
