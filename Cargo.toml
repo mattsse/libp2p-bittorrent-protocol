@@ -28,6 +28,8 @@ byteorder = "1.3"
 walkdir = "2.2"
 fnv = "1.0"
 lru-cache = "0.1"
+env_logger = "0.7"
+
 
 [features]
 
@@ -36,3 +38,4 @@ tokio = "0.1"
 libp2p-tcp = "0.13"
 libp2p = "0.13"
 libp2p-kad = "0.13"
+tempfile = "3.1.0"
