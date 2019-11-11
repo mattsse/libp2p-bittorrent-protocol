@@ -90,7 +90,14 @@ impl PeerMessage {
             | PeerMessage::Interested
             | PeerMessage::NotInterested => 1,
             PeerMessage::Have { .. } => 1 + 4,
-            PeerMessage::Bitfield { index_field } => 1 + index_field.len(),
+            PeerMessage::Bitfield { index_field } => {
+                let mut len = index_field.len() / 8;
+                let rem = index_field.len() % 8;
+                if rem > 0 {
+                    len += 1;
+                }
+                1 + len
+            }
             PeerMessage::Request {
                 request: peer_request,
             }
