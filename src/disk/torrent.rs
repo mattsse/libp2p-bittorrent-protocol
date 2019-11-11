@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
 
+use libp2p_bittorrent_tracker::util::ShaHash;
+
 use crate::disk::error::TorrentError;
 use crate::error::Result;
 use crate::torrent::MetaInfo;
-use crate::util::ShaHash;
 
 /// used to document the progress of a torrent for restarting purposes
 pub struct TorrentProgress {

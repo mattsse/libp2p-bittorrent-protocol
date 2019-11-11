@@ -11,6 +11,8 @@ use lru_cache::LruCache;
 use tokio_fs::file::{OpenFuture, SeekFuture};
 use tokio_fs::OpenOptions;
 
+use libp2p_bittorrent_tracker::util::ShaHash;
+
 use crate::behavior::BittorrentEvent::LeechBlockResult;
 use crate::disk::block::{
     Block,
@@ -29,7 +31,6 @@ use crate::disk::message::{DiskMessageIn, DiskMessageOut};
 use crate::disk::native::NativeFileSystem;
 use crate::peer::torrent::TorrentId;
 use crate::torrent::MetaInfo;
-use crate::util::ShaHash;
 
 /// `DiskManager` object which handles the storage of `Blocks` to the
 /// `FileSystem`.

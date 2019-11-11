@@ -4,12 +4,13 @@ use std::ops::{Deref, DerefMut};
 use bytes::{Bytes, BytesMut};
 use futures::Async;
 
+use libp2p_bittorrent_tracker::util::{ShaHash, SHA_HASH_LEN};
+
 use crate::disk::error::TorrentError;
 use crate::disk::file::TorrentFileId;
 use crate::disk::fs::FileSystem;
 use crate::piece::Piece;
 use crate::proto::message::PeerRequest;
-use crate::util::{ShaHash, SHA_HASH_LEN};
 
 /// `BlockMetadata` which tracks metadata associated with a `Block` of memory.
 #[derive(Copy, Clone, Hash, PartialEq, Eq, Debug)]

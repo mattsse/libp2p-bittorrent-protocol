@@ -6,9 +6,10 @@ use std::{convert::TryFrom, time::Duration};
 use sha1::Sha1;
 use wasm_timer::Instant;
 
+use libp2p_bittorrent_tracker::util::ShaHash;
+
 // TODO use a struct that is compliant with the tracker spec
 use crate::peer::BttPeer;
-use crate::util::ShaHash;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub enum EventType {

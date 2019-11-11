@@ -8,12 +8,13 @@ use sha1::Sha1;
 use tokio_fs::file::{OpenFuture, SeekFuture};
 use tokio_fs::OpenOptions;
 
+use libp2p_bittorrent_tracker::util::ShaHash;
+
 use crate::disk::block::{Block, BlockMetadata, BlockMut};
 use crate::disk::error::TorrentError;
 use crate::disk::message::{DiskMessageIn, DiskMessageOut};
 use crate::peer::torrent::TorrentId;
 use crate::torrent::{InfoContent, MetaInfo};
-use crate::util::ShaHash;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct TorrentFile {

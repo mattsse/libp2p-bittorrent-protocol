@@ -14,6 +14,8 @@ use smallvec::SmallVec;
 use tokio_io::{AsyncRead, AsyncWrite};
 use wasm_timer::Instant;
 
+use libp2p_bittorrent_tracker::util::ShaHash;
+
 use crate::bitfield::BitField;
 use crate::disk::block::{Block, BlockMetadata};
 use crate::disk::message::DiskMessageOut;
@@ -32,7 +34,6 @@ use crate::{
     peer::torrent::{Torrent, TorrentId, TorrentPeer, TorrentPool, TorrentPoolState},
     piece::PieceSelection,
     torrent::MetaInfo,
-    util::ShaHash,
 };
 
 /// Network behaviour that handles Bittorrent.

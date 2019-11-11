@@ -14,10 +14,11 @@ use bendy::{
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use sha1::{Sha1, DIGEST_LENGTH};
 
+use libp2p_bittorrent_tracker::util::{ShaHash, SHA_HASH_LEN};
+
 use crate::bitfield::BitField;
 use crate::disk::error::TorrentError;
 use crate::error::Result;
-use crate::util::{ShaHash, SHA_HASH_LEN};
 
 pub mod builder;
 

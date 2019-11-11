@@ -1,13 +1,13 @@
 use libp2p_core::PeerId;
 use wasm_timer::Instant;
 
+use libp2p_bittorrent_tracker::util::ShaHash;
+pub use torrent::TorrentState;
+
 use crate::bitfield::BitField;
-use crate::util::ShaHash;
 
 pub mod piece;
 pub mod torrent;
-
-pub use torrent::TorrentState;
 
 /// Status of our connection to a node reported by the BitTorrent protocol.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]

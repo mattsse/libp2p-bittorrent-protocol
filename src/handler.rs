@@ -18,6 +18,8 @@ use libp2p_swarm::{
 use tokio_io::{AsyncRead, AsyncWrite};
 use wasm_timer::Instant;
 
+use libp2p_bittorrent_tracker::util::ShaHash;
+
 use crate::behavior::{Bittorrent, SeedLeechConfig};
 use crate::bitfield::BitField;
 use crate::disk::torrent::TorrentSeed;
@@ -28,7 +30,6 @@ use crate::piece::Piece;
 use crate::proto::message::{Handshake, PeerMessage, PeerRequest};
 use crate::proto::{BittorrentProtocolConfig, BttStreamSink};
 use crate::torrent::MetaInfo;
-use crate::util::ShaHash;
 
 /// Protocol handler that handles Bittorrent communications with the remote.
 ///

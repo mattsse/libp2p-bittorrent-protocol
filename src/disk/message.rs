@@ -1,8 +1,9 @@
+use libp2p_bittorrent_tracker::util::ShaHash;
+
 use crate::disk::block::{Block, BlockMetadata, BlockMut};
 use crate::disk::error::TorrentError;
 use crate::peer::torrent::TorrentId;
 use crate::torrent::MetaInfo;
-use crate::util::ShaHash;
 
 // TODO add messages for moving finished files
 

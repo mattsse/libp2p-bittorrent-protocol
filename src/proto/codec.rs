@@ -202,9 +202,11 @@ impl Encoder for PeerWireCodec {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::util::ShaHash;
     use libp2p_core::PeerId;
+
+    use libp2p_bittorrent_tracker::util::ShaHash;
+
+    use super::*;
 
     macro_rules! peer_wire_msg_ende {
         ($( $msg:expr ),*) => {
