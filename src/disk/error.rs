@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use snafu::Snafu;
 
-use libp2p_bittorrent_tracker::util::ShaHash;
+use crate::util::ShaHash;
 
 use crate::disk::block::BlockMetadata;
 use crate::peer::torrent::TorrentId;

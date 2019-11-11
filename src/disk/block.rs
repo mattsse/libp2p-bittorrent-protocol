@@ -4,7 +4,7 @@ use std::ops::{Deref, DerefMut};
 use bytes::{Bytes, BytesMut};
 use futures::Async;
 
-use libp2p_bittorrent_tracker::util::{ShaHash, SHA_HASH_LEN};
+use crate::util::{ShaHash, SHA_HASH_LEN};
 
 use crate::disk::error::TorrentError;
 use crate::disk::file::TorrentFileId;

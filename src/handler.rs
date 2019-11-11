@@ -18,7 +18,7 @@ use libp2p_swarm::{
 use tokio_io::{AsyncRead, AsyncWrite};
 use wasm_timer::Instant;
 
-use libp2p_bittorrent_tracker::util::ShaHash;
+use crate::util::ShaHash;
 
 use crate::behavior::{Bittorrent, SeedLeechConfig};
 use crate::bitfield::BitField;

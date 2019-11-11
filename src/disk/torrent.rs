@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use libp2p_bittorrent_tracker::util::ShaHash;
+use crate::util::ShaHash;
 
 use crate::disk::error::TorrentError;
 use crate::error::Result;

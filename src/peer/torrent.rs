@@ -8,7 +8,7 @@ use fnv::FnvHashMap;
 use libp2p_core::PeerId;
 use wasm_timer::Instant;
 
-use libp2p_bittorrent_tracker::util::ShaHash;
+use crate::util::ShaHash;
 
 use crate::behavior::{
     BittorrentConfig,

@@ -17,7 +17,6 @@ futures = "0.1"
 fnv = "1.0"
 libp2p-core = "0.13"
 libp2p-swarm = "0.3"
-libp2p-bittorrent-tracker = { version = "0.1.0", path = "tracker" }
 log = "0.4"
 lru-cache = "0.1"
 rand = "0.7.2"
@@ -40,7 +39,3 @@ libp2p-tcp = "0.13"
 libp2p = "0.13"
 libp2p-kad = "0.13"
 tempfile = "3.1.0"
-
-
-[workspace]
-members = ["tracker"]

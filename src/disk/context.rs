@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use futures::sync::mpsc::Sender;
 
-use libp2p_bittorrent_tracker::util::ShaHash;
+use crate::util::ShaHash;
 
 use crate::disk::fs::FileSystem;
 use crate::disk::message::DiskMessageOut;

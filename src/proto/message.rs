@@ -3,7 +3,7 @@ use std::io::{self, Read, Write};
 
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 
-use libp2p_bittorrent_tracker::util::ShaHash;
+use crate::util::ShaHash;
 
 use crate::bitfield::BitField;
 use crate::error::Error;

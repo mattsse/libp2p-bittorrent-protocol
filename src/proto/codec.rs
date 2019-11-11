@@ -204,7 +204,7 @@ impl Encoder for PeerWireCodec {
 mod tests {
     use libp2p_core::PeerId;
 
-    use libp2p_bittorrent_tracker::util::ShaHash;
+    use crate::util::ShaHash;
 
     use super::*;
 
