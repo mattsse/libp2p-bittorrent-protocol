@@ -9,7 +9,11 @@ use libp2p_core::{
     upgrade::{self, InboundUpgrade, Negotiated, OutboundUpgrade},
 };
 use libp2p_swarm::{
-    KeepAlive, ProtocolsHandler, ProtocolsHandlerEvent, ProtocolsHandlerUpgrErr, SubstreamProtocol,
+    KeepAlive,
+    ProtocolsHandler,
+    ProtocolsHandlerEvent,
+    ProtocolsHandlerUpgrErr,
+    SubstreamProtocol,
 };
 use tokio_io::{AsyncRead, AsyncWrite};
 use wasm_timer::Instant;

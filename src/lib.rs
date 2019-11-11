@@ -11,6 +11,7 @@ pub mod handler;
 pub mod peer;
 mod piece;
 mod proto;
+mod tracker;
 
 pub mod torrent;
 pub mod util;
@@ -18,8 +19,15 @@ pub mod util;
 pub use behavior::{Bittorrent, BittorrentConfig, BittorrentEvent};
 
 pub use behavior::{
-    ChokeResult, DiskResult, HandshakeResult, HaveResult, InterestResult, KeepAliveResult,
-    LeechBlockResult, SeedBlockResult, TorrentAddedResult,
+    ChokeResult,
+    DiskResult,
+    HandshakeResult,
+    HaveResult,
+    InterestResult,
+    KeepAliveResult,
+    LeechBlockResult,
+    SeedBlockResult,
+    TorrentAddedResult,
 };
 
 pub use torrent::builder::TorrentBuilder;

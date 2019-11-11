@@ -13,7 +13,14 @@ use tokio_fs::OpenOptions;
 
 use crate::behavior::BittorrentEvent::LeechBlockResult;
 use crate::disk::block::{
-    Block, BlockFileRead, BlockFileWrite, BlockIn, BlockMetadata, BlockMut, BlockRead, BlockWrite,
+    Block,
+    BlockFileRead,
+    BlockFileWrite,
+    BlockIn,
+    BlockMetadata,
+    BlockMut,
+    BlockRead,
+    BlockWrite,
 };
 use crate::disk::error::TorrentError;
 use crate::disk::file::{FileEntry, TorrentFile, TorrentFileId};

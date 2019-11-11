@@ -9,8 +9,17 @@ use libp2p_core::PeerId;
 use wasm_timer::Instant;
 
 use crate::behavior::{
-    BittorrentConfig, BlockErr, HandshakeError, HandshakeOk, HandshakeResult, InterestOk,
-    InterestResult, KeepAliveOk, KeepAliveResult, PeerError, SeedLeechConfig,
+    BittorrentConfig,
+    BlockErr,
+    HandshakeError,
+    HandshakeOk,
+    HandshakeResult,
+    InterestOk,
+    InterestResult,
+    KeepAliveOk,
+    KeepAliveResult,
+    PeerError,
+    SeedLeechConfig,
 };
 use crate::bitfield::BitField;
 use crate::disk::block::{Block, BlockMetadata, BlockMut};

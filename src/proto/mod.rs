@@ -4,7 +4,10 @@ use std::{io, iter};
 use bytes::BytesMut;
 use futures::{
     future::{self, FutureResult},
-    sink, stream, Sink, Stream,
+    sink,
+    stream,
+    Sink,
+    Stream,
 };
 use libp2p_core::upgrade::{InboundUpgrade, Negotiated, OutboundUpgrade, UpgradeInfo};
 use libp2p_core::{Multiaddr, PeerId};
