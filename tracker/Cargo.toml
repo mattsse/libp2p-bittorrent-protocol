@@ -1,0 +1,24 @@
+[package]
+name = "libp2p-bittorrent-tracker"
+version = "0.1.0"
+authors = ["mattsse <matthias.seitz@tum.de>"]
+edition = "2018"
+keywords = ["peer-to-peer", "libp2p", "networking"]
+categories = ["network-programming", "asynchronous"]
+
+[dependencies]
+futures = "0.1"
+libp2p-kad = "0.13"
+log = "0.4"
+libp2p-core = "0.13"
+libp2p-swarm = "0.3"
+sha1 = "0.6.0"
+fnv = "1.0"
+tokio-io = "0.1"
+bendy = "0.2"
+wasm-timer = "0.1"
+
+[dev-dependencies]
+tokio = "0.1"
+libp2p-tcp = "0.13"
+libp2p = "0.13"

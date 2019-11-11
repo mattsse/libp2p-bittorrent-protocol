@@ -11,7 +11,6 @@ pub mod handler;
 pub mod peer;
 mod piece;
 mod proto;
-mod tracker;
 
 pub mod torrent;
 pub mod util;
