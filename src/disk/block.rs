@@ -58,6 +58,16 @@ impl From<PeerRequest> for BlockMetadata {
     }
 }
 
+impl Into<PeerRequest> for BlockMetadata {
+    fn into(self) -> PeerRequest {
+        PeerRequest {
+            index: self.piece_index as u32,
+            begin: self.block_offset as u32,
+            length: self.block_length as u32,
+        }
+    }
+}
+
 /// `Block` of immutable memory.
 #[derive(Debug)]
 pub struct Block {

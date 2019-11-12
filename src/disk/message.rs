@@ -39,9 +39,6 @@ pub enum DiskMessageIn {
 #[derive(Debug)]
 pub enum DiskMessageOut {
     /// Message indicating that the torrent has been added.
-    ///
-    /// Any good pieces already existing for the torrent will be sent
-    /// as `FoundGoodPiece` messages BEFORE this message is sent.
     TorrentAdded(TorrentId),
     /// Message indicating that the torrent has been removed.
     TorrentRemoved(TorrentId, MetaInfo),
@@ -54,9 +51,9 @@ pub enum DiskMessageOut {
     /// the given torrent (hash), as well as the piece index.
     FoundBadPiece(TorrentId, u64),
     /// Message indicating that the given block has been loaded.
-    BlockRead(BlockMut),
+    BlockRead(TorrentId, BlockMut),
     /// Message indicating that the given block has been processed.
-    BlockWritten(Block),
+    BlockWritten(TorrentId, Block),
     /// Error occurring from a `AddTorrent` or `RemoveTorrent` message.
     TorrentError(TorrentId, TorrentError),
     /// Error occurring from a `LoadBlock` message.

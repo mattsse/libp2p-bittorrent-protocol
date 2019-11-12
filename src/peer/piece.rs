@@ -419,8 +419,8 @@ impl PieceBuffer {
                 self.pending_blocks.insert(peer.clone(), block.clone());
                 return Some(NextBlock {
                     torrent_id: self.torrent_id,
-                    peer,
-                    block,
+                    peer_id: peer,
+                    block_metadata: block,
                 });
             } else {
                 self.peers.push(peer);
@@ -540,7 +540,7 @@ pub struct NextBlock {
     /// Identifier for the torrent.
     pub torrent_id: TorrentId,
     /// The index of the piece in the bitfield.
-    pub block: BlockMetadata,
+    pub block_metadata: BlockMetadata,
     /// The peer the block should be requested from.
-    pub peer: PeerId,
+    pub peer_id: PeerId,
 }

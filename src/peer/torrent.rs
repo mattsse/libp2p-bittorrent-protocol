@@ -28,7 +28,7 @@ use crate::disk::block::{Block, BlockMetadata, BlockMut};
 use crate::disk::error::TorrentError;
 use crate::disk::message::DiskMessageIn;
 use crate::handler::BittorrentRequestId;
-use crate::peer::piece::TorrentPieceHandler;
+use crate::peer::piece::{NextBlock, TorrentPieceHandler};
 use crate::peer::{BttPeer, ChokeType, InterestType};
 use crate::piece::{Piece, PieceSelection};
 use crate::proto::message::{Handshake, PeerRequest};
@@ -66,14 +66,12 @@ pub enum TorrentPoolState<'a, TInner> {
     PieceReady(TorrentId, Block),
     /// A torrent is finished and remains in the pool for seeding.
     Finished(TorrentId),
-    /// A torrent has finished.
-    Removed(Torrent<TInner>),
-    /// A torrent was added.
-    Added(TorrentId),
     /// the peer we need to send a new KeepAlive msg
     KeepAlive(PeerId),
     /// A remote peer has timed out.
     Timeout(PeerId),
+    /// A new block is ready to be downloaded
+    NextBlock(NextBlock),
 }
 
 impl<TInner> TorrentPool<TInner> {
