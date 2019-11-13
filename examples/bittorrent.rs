@@ -31,6 +31,7 @@ use libp2p::{build_development_transport, identity, PeerId, Swarm};
 use rand;
 use tempfile::tempdir;
 
+use libp2p_bittorrent_protocol::behavior::InterestOk;
 use libp2p_bittorrent_protocol::disk::NativeFileSystem;
 use libp2p_bittorrent_protocol::peer::TorrentState;
 use libp2p_bittorrent_protocol::{
@@ -144,8 +145,12 @@ fn main() {
                 }
             },
             Async::Ready(Some(BittorrentEvent::InterestResult(res))) => match res {
-                Ok(ok) => {
-                    println!("interest ok: {:?}", ok);
+                Ok(InterestOk::Interested(peer)) => {
+                    swarm.unchoke_peer(&peer);
+                    println!("interested: {:?}", peer);
+                }
+                Ok(InterestOk::NotInterested(peer)) => {
+                    println!("not interested: {:?}", peer);
                 }
                 Err(err) => {
                     println!("interest error: {:?}", err);
@@ -157,6 +162,14 @@ fn main() {
                 }
                 Err(err) => {
                     println!("bitfield error: {:?}", err);
+                }
+            },
+            Async::Ready(Some(BittorrentEvent::ChokeResult(res))) => match res {
+                Ok(ok) => {
+                    println!("choke ok: {:?}", ok);
+                }
+                Err(err) => {
+                    println!("choke error: {:?}", err);
                 }
             },
             Async::Ready(Some(_)) => {}
