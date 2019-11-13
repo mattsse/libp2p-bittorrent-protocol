@@ -60,7 +60,7 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
     /// queue in a new block to write to disk
     pub fn write_block(&mut self, torrent_id: TorrentId, block: Block) {
         self.queued_events
-            .push_back(DiskMessageIn::WriteBlock((torrent_id, block)));
+            .push_back(DiskMessageIn::WriteBlock(torrent_id, block));
     }
 
     /// fill a new block from a seed
@@ -229,7 +229,9 @@ impl<TFileSystem: FileSystem> Future for DiskManager<TFileSystem> {
                         //                            }
                         //                        );
                     }
-                    _ => panic!(),
+                    DiskMessageIn::WriteBlock(id, block) => {
+                        println!("Write block received {:?} {:?}", id, block.metadata());
+                    }
                 }
             } else {
                 break;

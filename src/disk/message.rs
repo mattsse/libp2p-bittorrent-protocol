@@ -32,7 +32,7 @@ pub enum DiskMessageIn {
     /// Message to load the given block in to memory.
     ReadBlock(TorrentId, BlockMetadata),
     /// Message to process the given block and persist it.
-    WriteBlock((TorrentId, Block)),
+    WriteBlock(TorrentId, Block),
 }
 
 /// Messages that can be received from the `DiskManager`.

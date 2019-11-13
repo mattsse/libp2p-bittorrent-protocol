@@ -95,6 +95,24 @@ impl BttPeer {
         }
     }
 
+    /// Last Heartbeat from the remote is older than 2 minutes
+    pub fn is_remote_timeout(&self, timestamp: Instant) -> bool {
+        if timestamp.duration_since(self.remote_heartbeat).as_secs() > 120 {
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Our last timeout is older than 2 minutes
+    pub fn is_client_timeout(&self, timestamp: Instant) -> bool {
+        if timestamp.duration_since(self.client_heartbeat).as_secs() > 120 {
+            true
+        } else {
+            false
+        }
+    }
+
     /// Whether this peer has pieces that the other bitfield is lacking.
     pub fn is_having_missing_pieces_for(&self, other: &BitField) -> bool {
         if let Some(bitfield) = &self.bitfield {

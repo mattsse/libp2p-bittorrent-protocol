@@ -22,7 +22,7 @@ use crate::disk::message::DiskMessageOut;
 use crate::peer::piece::PieceBuffer;
 use crate::peer::torrent::TorrentState;
 use crate::peer::{BttPeer, ChokeType, InterestType};
-use crate::proto::message::{Handshake, PeerRequest};
+use crate::proto::message::{Handshake, PeerMessage, PeerRequest};
 use crate::{
     disk::error::TorrentError,
     disk::fs::FileSystem,
@@ -143,10 +143,38 @@ where
     }
 
     pub fn choke_peer(&mut self, peer_id: &PeerId) {
-        unimplemented!()
+        if let Ok(id) = self.torrents.choke_remote(peer_id) {
+            self.queued_events
+                .push_back(NetworkBehaviourAction::SendEvent {
+                    peer_id: peer_id.clone(),
+                    event: BittorrentHandlerIn::Choke {
+                        inner: ChokeType::Choked,
+                    },
+                });
+        } else {
+            self.queued_events
+                .push_back(NetworkBehaviourAction::GenerateEvent(
+                    BittorrentEvent::ChokeResult(Err(PeerError::NotFound(peer_id.clone()))),
+                ))
+        }
     }
 
-    pub fn unchoke_peer(&mut self, peer_id: &PeerId) {}
+    pub fn unchoke_peer(&mut self, peer_id: &PeerId) {
+        if let Ok(id) = self.torrents.unchoke_remote(peer_id) {
+            self.queued_events
+                .push_back(NetworkBehaviourAction::SendEvent {
+                    peer_id: peer_id.clone(),
+                    event: BittorrentHandlerIn::Choke {
+                        inner: ChokeType::UnChoked,
+                    },
+                });
+        } else {
+            self.queued_events
+                .push_back(NetworkBehaviourAction::GenerateEvent(
+                    BittorrentEvent::ChokeResult(Err(PeerError::NotFound(peer_id.clone()))),
+                ))
+        }
+    }
 
     /// Add a new torrent to leech from peers
     pub fn add_leech(&mut self, leech: MetaInfo, state: TorrentState) {
@@ -487,6 +515,7 @@ where
                 request,
                 request_id,
             } => {
+                debug!("received new block request {:?}", request);
                 // remote wants a new block
                 // TODO check config for seeding
                 // validate that we can send a block first
@@ -517,6 +546,7 @@ where
                 }
             }
             BittorrentHandlerEvent::GetPieceRes { piece, user_data } => {
+                debug!("received new block response {:?}", piece);
                 match self
                     .torrents
                     .on_block_response(user_data, &peer_id, piece.into())
@@ -617,7 +647,6 @@ where
         >,
     > {
         let now = Instant::now();
-
         loop {
             // Drain queued events.
             if let Some(event) = self.queued_events.pop_front() {
@@ -627,17 +656,26 @@ where
             // advance the torrent pool state
             loop {
                 match self.torrents.poll(now) {
-                    TorrentPoolState::Timeout(id) => {
-                        if let Some(event) = self.on_remote_timeout(id) {
+                    TorrentPoolState::Timeout(torrent, peer) => {
+                        if let Some(event) = self.on_remote_timeout(peer) {
                             return Async::Ready(NetworkBehaviourAction::GenerateEvent(event));
                         }
                         break;
                     }
-                    TorrentPoolState::PieceReady(torrent_id, buffer) => {
-                        // write complete piece to disk
-                        self.disk_manager.write_block(torrent_id, buffer);
+                    TorrentPoolState::PieceReady(res) => {
+                        match res {
+                            Ok((torrent_id, piece)) =>
+                            // write complete piece to disk
+                            {
+                                self.disk_manager.write_block(torrent_id, piece)
+                            }
+                            Err(e) => {
+                                // TODO reset torrent handler
+                            }
+                        }
                     }
-                    TorrentPoolState::KeepAlive(peer_id) => {
+                    TorrentPoolState::KeepAlive(torrent, peer_id) => {
+                        debug!("sending keepalive to {:?}", peer_id);
                         // a new keepalive msg needs to be send
                         return Async::Ready(NetworkBehaviourAction::SendEvent {
                             peer_id,
@@ -649,11 +687,13 @@ where
                     }
                     TorrentPoolState::Idle => break,
                     TorrentPoolState::Finished(torrent_id) => {
+                        debug!("torrent complete {:?}", torrent_id);
                         return Async::Ready(NetworkBehaviourAction::GenerateEvent(
                             BittorrentEvent::TorrentFinished(torrent_id),
                         ));
                     }
                     TorrentPoolState::NextBlock(block) => {
+                        debug!("requesting new block {:?}", block);
                         return Async::Ready(NetworkBehaviourAction::SendEvent {
                             peer_id: block.peer_id,
                             event: BittorrentHandlerIn::GetPieceReq {
@@ -673,9 +713,15 @@ where
                                 DiskMessageOut::TorrentAdded(_) => {}
                                 DiskMessageOut::TorrentRemoved(_, _) => {}
                                 DiskMessageOut::TorrentSynced(_) => {}
-                                DiskMessageOut::FoundGoodPiece(_, _) => {}
-                                DiskMessageOut::FoundBadPiece(_, _) => {}
+                                DiskMessageOut::FoundGoodPiece(_, _) => {
+                                    // TODO send have
+                                }
+                                DiskMessageOut::FoundBadPiece(_, _) => {
+                                    // TODO rm have from cocal
+                                }
                                 DiskMessageOut::BlockRead(torrent_id, block) => {
+                                    debug!("block read {:?}", block.metadata());
+
                                     // TODO clear torrent pool pending read and
                                     // send response
                                 }

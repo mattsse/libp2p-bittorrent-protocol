@@ -28,7 +28,7 @@ use crate::disk::block::{Block, BlockMetadata, BlockMut};
 use crate::disk::error::TorrentError;
 use crate::disk::message::DiskMessageIn;
 use crate::handler::BittorrentRequestId;
-use crate::peer::piece::{NextBlock, TorrentPieceHandler};
+use crate::peer::piece::{NextBlock, TorrentPieceHandler, TorrentPieceHandlerState};
 use crate::peer::{BttPeer, ChokeType, InterestType};
 use crate::piece::{Piece, PieceSelection};
 use crate::proto::message::{Handshake, PeerRequest};
@@ -63,13 +63,13 @@ pub enum TorrentPoolState<'a, TInner> {
     /// At least one torrent is waiting to generate requests.
     Waiting(&'a mut Torrent<TInner>),
     /// A leeched piece is ready to process
-    PieceReady(TorrentId, Block),
+    PieceReady(Result<(TorrentId, Block), TorrentError>),
     /// A torrent is finished and remains in the pool for seeding.
     Finished(TorrentId),
     /// the peer we need to send a new KeepAlive msg
-    KeepAlive(PeerId),
+    KeepAlive(TorrentId, PeerId),
     /// A remote peer has timed out.
-    Timeout(PeerId),
+    Timeout(TorrentId, PeerId),
     /// A new block is ready to be downloaded
     NextBlock(NextBlock),
 }
@@ -203,8 +203,30 @@ impl<TInner> TorrentPool<TInner> {
         )
     }
 
+    pub fn unchoke_remote(&mut self, peer_id: &PeerId) -> Result<TorrentId, ()> {
+        for torrent in self.torrents.values_mut() {
+            if torrent.unchoke_remote(peer_id).is_some() {
+                return Ok(torrent.id());
+            }
+        }
+        Err(())
+    }
+
+    pub fn choke_remote(&mut self, peer_id: &PeerId) -> Result<TorrentId, ()> {
+        for torrent in self.torrents.values_mut() {
+            if torrent.choke_remote(peer_id).is_some() {
+                return Ok(torrent.id());
+            }
+        }
+        Err(())
+    }
+
     fn iter_active(&self) -> impl Iterator<Item = &Torrent<TInner>> {
         self.torrents.values().filter(|x| x.is_active())
+    }
+
+    fn iter_active_mut(&mut self) -> impl Iterator<Item = &mut Torrent<TInner>> {
+        self.torrents.values_mut().filter(|x| x.is_active())
     }
 
     /// Whether the remote can contribute to the torrent's completion
@@ -527,6 +549,14 @@ impl<TInner> TorrentPool<TInner> {
     }
 
     pub fn poll(&mut self, now: Instant) -> TorrentPoolState<TInner> {
+        println!("polled pool.");
+        for torrent in self.iter_active_mut() {
+            match torrent.poll(now) {
+                TorrentPoolState::Idle => continue,
+                TorrentPoolState::Waiting(_) => continue,
+                ready => return ready,
+            }
+        }
         TorrentPoolState::Idle
     }
 }
@@ -597,7 +627,29 @@ impl<TInner> Torrent<TInner> {
     }
 
     pub fn poll(&mut self, now: Instant) -> TorrentPoolState<TInner> {
-        unimplemented!()
+        for (id, peer) in &mut self.piece_handler.peers {
+            // TODO only consider active peers
+            if peer.is_client_timeout(now) {
+                peer.client_heartbeat = Instant::now();
+                return TorrentPoolState::KeepAlive(self.id, id.clone());
+            }
+            if peer.is_remote_timeout(now) {
+                return TorrentPoolState::Timeout(self.id, id.clone());
+            }
+        }
+        match self.piece_handler.poll() {
+            TorrentPieceHandlerState::WaitingPeers => TorrentPoolState::Waiting(self),
+            TorrentPieceHandlerState::Ready(block) => {
+                if let Some(block) = block {
+                    TorrentPoolState::NextBlock(block)
+                } else {
+                    TorrentPoolState::Waiting(self)
+                }
+            }
+            TorrentPieceHandlerState::Finished(res) => {
+                TorrentPoolState::PieceReady(res.map(|x| (self.id(), x)))
+            }
+        }
     }
 
     /// Update the peer's latest heartbeat timestamp.
@@ -665,6 +717,22 @@ impl<TInner> Torrent<TInner> {
         interest: InterestType,
     ) -> Option<InterestType> {
         self.piece_handler.set_client_interest(peer_id, interest)
+    }
+
+    fn set_choke_remote(&mut self, peer: &PeerId, choke: ChokeType) -> Option<ChokeType> {
+        if let Some(peer) = self.piece_handler.peers.get_mut(peer) {
+            Some(std::mem::replace(&mut peer.remote_choke, choke))
+        } else {
+            None
+        }
+    }
+
+    pub fn unchoke_remote(&mut self, peer: &PeerId) -> Option<ChokeType> {
+        self.set_choke_remote(peer, ChokeType::UnChoked)
+    }
+
+    pub fn choke_remote(&mut self, peer: &PeerId) -> Option<ChokeType> {
+        self.set_choke_remote(peer, ChokeType::Choked)
     }
 
     /// Update the peer's bitfield.
