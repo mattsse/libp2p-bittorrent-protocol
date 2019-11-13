@@ -28,7 +28,6 @@ use std::io::Write;
 
 use futures::prelude::*;
 use libp2p::{build_development_transport, identity, PeerId, Swarm};
-use libp2p_core::Multiaddr;
 use rand;
 use tempfile::tempdir;
 
@@ -64,31 +63,25 @@ fn main() {
 
     // Order Bittorrent to start torrenting from a peer.
     if let Some(addr) = env::args().nth(1) {
-        let remote_addr = addr.clone();
-
-        let to_dial = env::args().nth(2).expect("Demo torrent required.");
-
-        let to_dial = to_dial.parse().expect("Failed to parse peer ID to find");
-
+        let peer_id = env::args().nth(2).expect("Demo torrent required.");
+        let peer_id: PeerId = peer_id.parse().expect("Failed to parse peer ID to find");
         let torrent = env::args().nth(3).expect("Demo torrent required.");
-
         let torrent = MetaInfo::from_torrent_file(torrent).expect("Failed to load torrent file");
-
         let info_hash = torrent.info_hash.clone();
 
         // add a new leech
         swarm.add_leech(torrent, TorrentState::Active);
 
         // start the handshake
-        swarm.insert_peer_candidate(to_dial, info_hash);
+        swarm.add_address_torrents(
+            peer_id.clone(),
+            addr.parse().expect("Failed to parse multiaddr."),
+            &[info_hash.clone().into()],
+        );
 
-        match addr.parse() {
-            Ok(remote) => match Swarm::dial_addr(&mut swarm, remote) {
-                Ok(()) => println!("Dialed {:?}", remote_addr),
-                Err(e) => println!("Dialing {:?} failed with: {:?}", remote_addr, e),
-            },
-            Err(err) => println!("Failed to parse address to dial: {:?}", err),
-        };
+        swarm
+            .handshake_known_peer(peer_id, info_hash)
+            .expect("Peer id needs to be known.");
     } else {
         // generate some rubbish
 
@@ -132,46 +125,50 @@ fn main() {
     // Use tokio to drive the `Swarm`.
     let mut listening = false;
     // Start torrenting
-    tokio::run(futures::future::poll_fn(move || {
-        loop {
-            match swarm.poll().expect("Error while polling swarm") {
-                Async::Ready(Some(BittorrentEvent::TorrentAddedResult(res))) => match res {
-                    Ok(ok) => {
-                        println!("Added new Seed: {:?}", ok);
-                    }
-                    Err(err) => {
-                        println!("Failed to add new seed: {:?}", err);
-                    }
-                },
-                Async::Ready(Some(BittorrentEvent::HandshakeResult(res))) => match res {
-                    Ok(ok) => {
-                        println!("Handshake ok: {:?}", ok);
-                    }
-                    Err(err) => {
-                        println!("Failed to handshake: {:?}", err);
-                    }
-                },
-                Async::Ready(Some(BittorrentEvent::InterestResult(res))) => match res {
-                    Ok(ok) => {
-                        println!("interest ok: {:?}", ok);
-                    }
-                    Err(err) => {
-                        println!("interest error: {:?}", err);
-                    }
-                },
-                Async::Ready(Some(_)) => {}
-                Async::Ready(None) | Async::NotReady => {
-                    if !listening {
-                        if let Some(a) = Swarm::listeners(&swarm).next() {
-                            println!("Listening on {:?}", a);
-                            listening = true;
-                        }
-                    }
-                    return Ok(Async::NotReady);
+    tokio::run(futures::future::poll_fn(move || loop {
+        match swarm.poll().expect("Error while polling swarm") {
+            Async::Ready(Some(BittorrentEvent::TorrentAddedResult(res))) => match res {
+                Ok(ok) => {
+                    println!("Added new Seed: {:?}", ok);
                 }
+                Err(err) => {
+                    println!("Failed to add new seed: {:?}", err);
+                }
+            },
+            Async::Ready(Some(BittorrentEvent::HandshakeResult(res))) => match res {
+                Ok(ok) => {
+                    println!("Handshake ok: {:?}", ok);
+                }
+                Err(err) => {
+                    println!("Failed to handshake: {:?}", err);
+                }
+            },
+            Async::Ready(Some(BittorrentEvent::InterestResult(res))) => match res {
+                Ok(ok) => {
+                    println!("interest ok: {:?}", ok);
+                }
+                Err(err) => {
+                    println!("interest error: {:?}", err);
+                }
+            },
+            Async::Ready(Some(BittorrentEvent::BitfieldResult(res))) => match res {
+                Ok(ok) => {
+                    println!("bitfield ok: {:?}", ok);
+                }
+                Err(err) => {
+                    println!("bitfield error: {:?}", err);
+                }
+            },
+            Async::Ready(Some(_)) => {}
+            Async::Ready(None) | Async::NotReady => {
+                if !listening {
+                    if let Some(a) = Swarm::listeners(&swarm).next() {
+                        println!("Listening on {:?}", a);
+                        listening = true;
+                    }
+                }
+                return Ok(Async::NotReady);
             }
         }
-
-        Ok(Async::NotReady)
     }));
 }

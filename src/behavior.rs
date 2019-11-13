@@ -56,7 +56,7 @@ where
     /// Marker to pin the generics.
     marker: PhantomData<TSubstream>,
     /// Known peers with their torrents
-    known_peers: FnvHashMap<PeerId, HashSet<ShaHash>>,
+    known_peers: FnvHashMap<PeerId, (Multiaddr, HashSet<ShaHash>)>,
     /// Pending handshakes
     pending_handshakes: FnvHashMap<PeerId, ShaHash>,
 }
@@ -79,41 +79,44 @@ where
         }
     }
 
-    pub fn insert_peer_candidate<T: Into<ShaHash>>(
+    pub fn add_address_torrents(
         &mut self,
-        peer_id: PeerId,
-        info_hash: T,
+        peer: PeerId,
+        address: Multiaddr,
+        torrents: &[ShaHash],
     ) -> bool {
-        if let Some(hashes) = self.known_peers.get_mut(&peer_id) {
-            hashes.insert(info_hash.into())
+        if let Some((know_address, know_torrents)) = self.known_peers.get_mut(&peer) {
+            *know_address = address;
+            know_torrents.extend(torrents.into_iter());
+            true
         } else {
-            let mut hashes = HashSet::with_capacity(1);
-            hashes.insert(info_hash.into());
-            self.known_peers.insert(peer_id, hashes);
+            self.known_peers
+                .insert(peer, (address, torrents.iter().cloned().collect()));
             false
         }
     }
 
-    pub fn dial_and_handshake<T: Into<ShaHash>>(
+    pub fn handshake_known_peer<T: Into<ShaHash>>(
         &mut self,
-        peer_id: PeerId,
-        info_hash: T,
+        peer: PeerId,
+        torrent: T,
     ) -> Result<(), (PeerId, ShaHash)> {
-        let info_hash = info_hash.into();
-        if self.pending_handshakes.contains_key(&peer_id) {
-            // already pending
-            return Err((peer_id, info_hash));
+        let torrent = torrent.into();
+        if self.pending_handshakes.contains_key(&peer) || self.connected_peers.contains(&peer) {
+            // already connected or handshake still pending
+            return Err((peer, torrent));
         }
 
-        if self.known_peers.contains_key(&peer_id) {
-            self.insert_peer_candidate(peer_id.clone(), info_hash.clone());
+        if self.known_peers.contains_key(&peer) {
+            self.queued_events
+                .push_back(NetworkBehaviourAction::DialPeer {
+                    peer_id: peer.clone(),
+                });
+            self.pending_handshakes.insert(peer, torrent);
+            Ok(())
+        } else {
+            Err((peer, torrent))
         }
-        self.queued_events
-            .push_back(NetworkBehaviourAction::DialPeer {
-                peer_id: peer_id.clone(),
-            });
-        self.pending_handshakes.insert(peer_id, info_hash);
-        Ok(())
     }
 
     /// start handshaking with a peer for specific torrent
@@ -143,9 +146,7 @@ where
         unimplemented!()
     }
 
-    pub fn unchoke_peer(&mut self, peer_id: &PeerId) {
-        unimplemented!()
-    }
+    pub fn unchoke_peer(&mut self, peer_id: &PeerId) {}
 
     /// Add a new torrent to leech from peers
     pub fn add_leech(&mut self, leech: MetaInfo, state: TorrentState) {
@@ -320,14 +321,26 @@ where
     }
 
     fn addresses_of_peer(&mut self, peer_id: &PeerId) -> Vec<Multiaddr> {
-        Vec::new()
+        if let Some((addr, _)) = self.known_peers.get(peer_id) {
+            vec![addr.clone()]
+        } else {
+            Vec::new()
+        }
     }
 
     fn inject_connected(&mut self, peer_id: PeerId, endpoint: ConnectedPoint) {
         // TODO lookup peer in DHT for torrents
-        debug!("inject_connected for {:?}", peer_id);
-        if let Some((id, hash)) = self.pending_handshakes.remove_entry(&peer_id) {
-            self.send_handshake(hash, id);
+
+        // TODO only when we are dialer
+        match endpoint {
+            ConnectedPoint::Dialer { .. } => {
+                if let Some((id, hash)) = self.pending_handshakes.remove_entry(&peer_id) {
+                    self.send_handshake(hash, id);
+                }
+            }
+            ConnectedPoint::Listener { send_back_addr, .. } => {
+                self.add_address_torrents(peer_id.clone(), send_back_addr, &[]);
+            }
         }
 
         self.connected_peers.insert(peer_id);
@@ -437,16 +450,24 @@ where
                 user_data,
             } => {
                 // we received a bitfield from a remote
-                if !self
+                if self
                     .torrents
                     .set_peer_bitfield(&peer_id, user_data, index_field)
                 {
+                    // automatically send an interest message if remote has something we want
                     if self.torrents.is_remote_interesting(user_data, &peer_id) {
                         self.torrents.set_client_interest(
                             user_data,
                             &peer_id,
                             InterestType::Interested,
                         );
+                        self.queued_events
+                            .push_back(NetworkBehaviourAction::GenerateEvent(
+                                BittorrentEvent::BitfieldResult(Ok(BitfieldOk {
+                                    torrent: user_data,
+                                    peer: peer_id.clone(),
+                                })),
+                            ));
                         self.queued_events
                             .push_back(NetworkBehaviourAction::SendEvent {
                                 peer_id,
@@ -456,7 +477,10 @@ where
                             });
                     }
                 } else {
-                    // TODO disconnect?
+                    self.queued_events
+                        .push_back(NetworkBehaviourAction::GenerateEvent(
+                            BittorrentEvent::BitfieldResult(Err(PeerError::NotFound(peer_id))),
+                        ));
                 }
             }
             BittorrentHandlerEvent::GetPieceReq {
@@ -515,7 +539,10 @@ where
                     }
                 }
             }
-            BittorrentHandlerEvent::CancelPiece { .. } => {}
+            BittorrentHandlerEvent::CancelPiece { .. } => {
+                // TODO
+                unimplemented!()
+            }
             BittorrentHandlerEvent::Choke { inner } => {
                 if let Some((torrent_id, old_choke_ty)) =
                     self.torrents.on_choke_by_remote(&peer_id, inner)
@@ -688,6 +715,7 @@ where
 pub enum BittorrentEvent {
     HandshakeResult(HandshakeResult),
     LeechBlockResult(LeechBlockResult),
+    BitfieldResult(BitfieldResult),
     SeedBlockResult(SeedBlockResult),
     DiskResult(DiskResult),
     KeepAliveResult(KeepAliveResult),
@@ -715,6 +743,14 @@ pub enum HandshakeError {
     InfoHashNotFound(PeerId, ShaHash),
     InvalidPeer(PeerId, Option<TorrentId>),
     Timeout(PeerId),
+}
+
+pub type BitfieldResult = Result<BitfieldOk, PeerError>;
+
+#[derive(Debug, Clone)]
+pub struct BitfieldOk {
+    pub torrent: TorrentId,
+    pub peer: PeerId,
 }
 
 /// The result of a `KeepAlive`.

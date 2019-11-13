@@ -344,7 +344,7 @@ impl<TInner> TorrentPool<TInner> {
         interest: InterestType,
     ) -> InterestResult {
         for torrent in self.torrents.values_mut() {
-            if let Some(interest) = match &interest {
+            if let Some(_) = match &interest {
                 InterestType::NotInterested => torrent.on_remote_not_interested(&peer_id),
                 InterestType::Interested => torrent.on_remote_interested(&peer_id),
             } {
