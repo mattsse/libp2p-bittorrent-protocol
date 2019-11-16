@@ -190,7 +190,7 @@ where
                 self.queued_events
                     .push_back(NetworkBehaviourAction::GenerateEvent(
                         BittorrentEvent::TorrentAddedResult(Ok(TorrentAddedOk::NewLeech {
-                            id,
+                            torrent: id,
                             state: actual_state,
                         })),
                     ));
@@ -234,7 +234,7 @@ where
                 self.queued_events
                     .push_back(NetworkBehaviourAction::GenerateEvent(
                         BittorrentEvent::TorrentAddedResult(Ok(TorrentAddedOk::NewSeed {
-                            id,
+                            torrent: id,
                             state: actual_state,
                         })),
                     ));
@@ -263,37 +263,10 @@ where
         unimplemented!()
     }
 
-    /// Handles a finished (i.e. successful) torrent.
-    fn torrent_finished(
-        &mut self,
-        torrent: Torrent<TorrentInner>,
-        params: &mut impl PollParameters,
-    ) -> Option<BittorrentEvent> {
-        unimplemented!()
-    }
-
     /// Handles a peer that failed to send a `KeepAlive`.
     fn on_remote_timeout(&self, peer_id: PeerId) -> Option<BittorrentEvent> {
         // TODO
         None
-    }
-
-    /// Handles a block for a specific torrent
-    fn block_ready(&mut self, torrent_id: TorrentId, buffer: Block) -> Option<BittorrentEvent> {
-        unimplemented!()
-
-        //        match buffer.try_into() {
-        //            Ok(block) => {
-        //                self.disk_manager.write_block(torrent_id, block);
-        //                None
-        //            }
-        //            Err(err) => Some(BittorrentEvent::BlockResult(Err(err))),
-        //        }
-    }
-
-    /// Gets a mutable reference to the disk manager.
-    pub fn disk_manager_mut(&mut self) -> &mut DiskManager<TFileSystem> {
-        &mut self.disk_manager
     }
 }
 
@@ -359,7 +332,6 @@ where
     fn inject_connected(&mut self, peer_id: PeerId, endpoint: ConnectedPoint) {
         // TODO lookup peer in DHT for torrents
 
-        // TODO only when we are dialer
         match endpoint {
             ConnectedPoint::Dialer { .. } => {
                 if let Some((id, hash)) = self.pending_handshakes.remove_entry(&peer_id) {
@@ -393,6 +365,7 @@ where
                     .on_handshake_request(peer_id.clone(), handshake)
                 {
                     Ok(handshake) => {
+                        debug!("answering good handshake request.");
                         self.queued_events
                             .push_back(NetworkBehaviourAction::SendEvent {
                                 peer_id,
@@ -403,6 +376,7 @@ where
                             });
                     }
                     Err(err) => {
+                        debug!("denying bad handshake request.");
                         self.queued_events
                             .push_back(NetworkBehaviourAction::GenerateEvent(
                                 BittorrentEvent::HandshakeResult(Err(err)),
@@ -420,6 +394,7 @@ where
                 handshake,
                 user_data,
             } => {
+                debug!("received handshake response");
                 // a peer responded to our handshake request
                 match self
                     .torrents
@@ -456,6 +431,7 @@ where
             } => {
                 // a peer requested the bitfield
                 if let Some(index_field) = self.torrents.get_bitfield(&peer_id) {
+                    debug!("received good bitfield request");
                     self.queued_events
                         .push_back(NetworkBehaviourAction::SendEvent {
                             peer_id,
@@ -465,6 +441,7 @@ where
                             },
                         });
                 } else {
+                    debug!("received bad bitfield request");
                     // peer is not associated with any torrent in the pool
                     self.queued_events
                         .push_back(NetworkBehaviourAction::SendEvent {
@@ -524,9 +501,11 @@ where
                     .on_piece_request(peer_id, request.into(), request_id)
                 {
                     Ok((id, block_metadata)) => {
+                        debug!("queuing block request {:?}", block_metadata);
                         self.disk_manager.read_block(id, block_metadata);
                     }
                     Err((peer_id, block_metadata, request_id)) => {
+                        debug!("can't serve block request {:?}", block_metadata);
                         self.queued_events
                             .push_back(NetworkBehaviourAction::SendEvent {
                                 peer_id: peer_id.clone(),
@@ -536,8 +515,8 @@ where
                         self.queued_events
                             .push_back(NetworkBehaviourAction::GenerateEvent(
                                 BittorrentEvent::SeedBlockResult(Err(
-                                    SeedBlockErr::InvalidRemote {
-                                        peer_id,
+                                    SeedBlockErr::RemoteNotAllowed {
+                                        peer: peer_id,
                                         block_metadata,
                                     },
                                 )),
@@ -546,22 +525,23 @@ where
                 }
             }
             BittorrentHandlerEvent::GetPieceRes { piece, user_data } => {
-                debug!("received new block response {:?}", piece);
                 match self
                     .torrents
                     .on_block_response(user_data, &peer_id, piece.into())
                 {
                     Ok(block_metadata) => {
+                        debug!("received good block response {:?}", block_metadata);
                         self.queued_events
                             .push_back(NetworkBehaviourAction::GenerateEvent(
                                 BittorrentEvent::LeechBlockResult(Ok(BlockOk {
-                                    peer_id,
+                                    peer: peer_id,
                                     block_metadata,
-                                    torrent_id: user_data,
+                                    torrent: user_data,
                                 })),
                             ))
                     }
                     Err(err) => {
+                        debug!("received bad block response {:?}", err);
                         self.queued_events
                             .push_back(NetworkBehaviourAction::GenerateEvent(
                                 BittorrentEvent::LeechBlockResult(Err(err)),
@@ -569,9 +549,25 @@ where
                     }
                 }
             }
-            BittorrentHandlerEvent::CancelPiece { .. } => {
-                // TODO
-                unimplemented!()
+            BittorrentHandlerEvent::CancelPiece {
+                request_id,
+                request,
+            } => {
+                if let Some((peer, block)) = self.torrents.on_cancel_request(request_id) {
+                    debug!("Cancelled read by remote {:?}", peer);
+                    self.queued_events
+                        .push_back(NetworkBehaviourAction::GenerateEvent(
+                            BittorrentEvent::SeedBlockResult(Ok(SeedBlockOk::CancelledByRemote {
+                                peer: peer_id,
+                                block_metadata: request.into(),
+                            })),
+                        ));
+                } else {
+                    self.queued_events
+                        .push_back(NetworkBehaviourAction::GenerateEvent(
+                            BittorrentEvent::SeedBlockResult(Err(SeedBlockErr::NotFound(peer_id))),
+                        ));
+                }
             }
             BittorrentHandlerEvent::Choke { inner } => {
                 if let Some((torrent_id, old_choke_ty)) =
@@ -580,8 +576,8 @@ where
                     self.queued_events
                         .push_back(NetworkBehaviourAction::GenerateEvent(
                             BittorrentEvent::ChokeResult(Ok(ChokeOk {
-                                torrent_id,
-                                peer_id,
+                                torrent: torrent_id,
+                                peer: peer_id,
                                 old_choke_ty,
                                 new_choke_ty: inner,
                             })),
@@ -607,7 +603,7 @@ where
                         self.queued_events
                             .push_back(NetworkBehaviourAction::GenerateEvent(
                                 BittorrentEvent::HaveResult(Ok(HaveOk {
-                                    peer_id,
+                                    peer: peer_id,
                                     piece: index,
                                 })),
                             ))
@@ -656,11 +652,11 @@ where
             // advance the torrent pool state
             loop {
                 match self.torrents.poll(now) {
+                    TorrentPoolState::Idle => break,
                     TorrentPoolState::Timeout(torrent, peer) => {
                         if let Some(event) = self.on_remote_timeout(peer) {
                             return Async::Ready(NetworkBehaviourAction::GenerateEvent(event));
                         }
-                        break;
                     }
                     TorrentPoolState::PieceReady(res) => {
                         match res {
@@ -685,7 +681,6 @@ where
                     TorrentPoolState::Waiting(torrent) => {
                         break;
                     }
-                    TorrentPoolState::Idle => break,
                     TorrentPoolState::Finished(torrent_id) => {
                         debug!("torrent complete {:?}", torrent_id);
                         return Async::Ready(NetworkBehaviourAction::GenerateEvent(
@@ -708,29 +703,58 @@ where
                     // drain pending disk io
                     match self.disk_manager.poll() {
                         Ok(Async::Ready(event)) => {
-                            // TODO event handling for diskmanager
                             match event {
                                 DiskMessageOut::TorrentAdded(_) => {}
                                 DiskMessageOut::TorrentRemoved(_, _) => {}
-                                DiskMessageOut::TorrentSynced(_) => {}
-                                DiskMessageOut::FoundGoodPiece(_, _) => {
-                                    // TODO send have
+                                DiskMessageOut::TorrentSynced(id) => {
+                                    self.queued_events.push_back(
+                                        NetworkBehaviourAction::GenerateEvent(
+                                            BittorrentEvent::DiskResult(Ok(
+                                                DiskMessageOut::TorrentSynced(id),
+                                            )),
+                                        ),
+                                    );
                                 }
-                                DiskMessageOut::FoundBadPiece(_, _) => {
-                                    // TODO rm have from cocal
-                                }
-                                DiskMessageOut::BlockRead(torrent_id, block) => {
-                                    debug!("block read {:?}", block.metadata());
+                                DiskMessageOut::BlockRead(torrent, block) => {
+                                    debug!("disk managaer read: {:?}", block.metadata());
 
-                                    // TODO clear torrent pool pending read and
-                                    // send response
+                                    if let Some((peer_id, request_id)) =
+                                        self.torrents.on_block_read(torrent, &block.metadata())
+                                    {
+                                        self.queued_events.push_back(
+                                            NetworkBehaviourAction::SendEvent {
+                                                peer_id,
+                                                event: BittorrentHandlerIn::GetPieceRes {
+                                                    piece: block.into_piece(),
+                                                    request_id,
+                                                },
+                                            },
+                                        );
+                                    } else {
+                                        // TODO error
+                                    }
                                 }
                                 DiskMessageOut::BlockWritten(torrent_id, block) => {
-                                    // TODO send HAVE message to all torrent
+                                    if let Some(torrent) = self.torrents.get(&torrent_id) {
+                                        let index = block.metadata().piece_index as u32;
+                                        for peer in torrent.iter_peer_ids() {
+                                            self.queued_events.push_back(
+                                                NetworkBehaviourAction::SendEvent {
+                                                    peer_id: peer.clone(),
+                                                    event: BittorrentHandlerIn::Have { index },
+                                                },
+                                            );
+                                        }
+                                    }
                                 }
                                 DiskMessageOut::TorrentError(_, _) => {}
-                                DiskMessageOut::LoadBlockError(_, _) => {}
-                                DiskMessageOut::ProcessBlockError(_, _) => {}
+                                DiskMessageOut::ReadBlockError(id, err) => {
+                                    debug!("encountered error while reading block {:?}", err);
+                                }
+                                DiskMessageOut::WriteBlockError(id, err) => {
+                                    debug!("encountered error while writing block {:?}", err);
+                                    // TODO err handling
+                                }
                             }
                         }
                         Err(err) => {
@@ -745,7 +769,7 @@ where
                 }
             }
 
-            // No immediate event was produced as a result of a finished bittorrent.
+            // No immediate event was produced as a result of a finished bittorrent event.
             // If no new events have been queued either, signal `NotReady` to
             // be polled again later.
             if self.queued_events.is_empty() {
@@ -804,8 +828,8 @@ pub type ChokeResult = Result<ChokeOk, PeerError>;
 
 #[derive(Debug, Clone)]
 pub struct ChokeOk {
-    pub torrent_id: TorrentId,
-    pub peer_id: PeerId,
+    pub torrent: TorrentId,
+    pub peer: PeerId,
     pub old_choke_ty: ChokeType,
     pub new_choke_ty: ChokeType,
 }
@@ -815,14 +839,14 @@ pub type KeepAliveResult = Result<KeepAliveOk, PeerError>;
 #[derive(Debug, Clone)]
 pub enum KeepAliveOk {
     Remote {
-        torrent_id: TorrentId,
-        peer_id: PeerId,
+        torrent: TorrentId,
+        peer: PeerId,
         old_heartbeat: Instant,
         new_heartbeat: Instant,
     },
     Client {
-        torrent_id: TorrentId,
-        peer_id: PeerId,
+        torrent: TorrentId,
+        peer: PeerId,
         old_heartbeat: Instant,
         new_heartbeat: Instant,
     },
@@ -847,7 +871,7 @@ pub type HaveResult = Result<HaveOk, HaveErr>;
 
 #[derive(Debug, Clone)]
 pub struct HaveOk {
-    pub peer_id: PeerId,
+    pub peer: PeerId,
     pub piece: u32,
 }
 
@@ -862,38 +886,55 @@ pub type LeechBlockResult = Result<BlockOk, BlockErr>;
 
 #[derive(Debug, Clone)]
 pub struct BlockOk {
-    pub peer_id: PeerId,
+    pub peer: PeerId,
     pub block_metadata: BlockMetadata,
-    pub torrent_id: TorrentId,
+    pub torrent: TorrentId,
 }
 
+#[derive(Debug)]
 pub enum BlockErr {
     NotRequested {
-        peer_id: PeerId,
+        peer: PeerId,
         block: Block,
     },
     InvalidBlock {
-        peer_id: PeerId,
+        peer: PeerId,
         expected: BlockMetadata,
         block: Block,
     },
 }
 
-pub type SeedBlockResult = Result<BlockOk, SeedBlockErr>;
+pub type SeedBlockResult = Result<SeedBlockOk, SeedBlockErr>;
 
-pub enum SeedBlockErr {
-    InvalidRemote {
-        peer_id: PeerId,
+pub enum SeedBlockOk {
+    Ok(BlockOk),
+    CancelledByRemote {
+        peer: PeerId,
         block_metadata: BlockMetadata,
     },
+}
+
+#[derive(Debug, Clone)]
+pub enum SeedBlockErr {
+    RemoteNotAllowed {
+        peer: PeerId,
+        block_metadata: BlockMetadata,
+    },
+    NotFound(PeerId),
 }
 
 pub type TorrentAddedResult = Result<TorrentAddedOk, TorrentAddedErr>;
 
 #[derive(Debug, Clone)]
 pub enum TorrentAddedOk {
-    NewSeed { id: TorrentId, state: TorrentState },
-    NewLeech { id: TorrentId, state: TorrentState },
+    NewSeed {
+        torrent: TorrentId,
+        state: TorrentState,
+    },
+    NewLeech {
+        torrent: TorrentId,
+        state: TorrentState,
+    },
 }
 
 #[derive(Debug, Clone)]

@@ -36,7 +36,7 @@ pub struct TorrentPieceHandler {
     /// Tracks the state of the currently downloaded piece
     piece_buffer: Option<PieceBuffer>,
     /// Pending read requests
-    pending_seed_blocks: FnvHashMap<PeerId, (BittorrentRequestId, BlockMetadata)>,
+    pending_seed_blocks: Vec<(PeerId, BittorrentRequestId, BlockMetadata)>,
     /// Which pieces the client owns and lacks
     bitfield: BitField,
     /// length for a piece in the torrent
@@ -158,8 +158,8 @@ impl TorrentPieceHandler {
     }
 
     /// Whether the remote peer can leech a new block, has none pending
-    pub fn is_ready_to_seed_block(&self, peer_id: &PeerId) -> bool {
-        !self.pending_seed_blocks.contains_key(peer_id)
+    pub fn is_ready_to_seed_block(&self, peer: &PeerId) -> bool {
+        !self.pending_seed_blocks.iter().any(|(p, _, _)| *p == *peer)
     }
 
     pub fn insert_block_seed(
@@ -168,8 +168,7 @@ impl TorrentPieceHandler {
         block: BlockMetadata,
         request_id: BittorrentRequestId,
     ) {
-        self.pending_seed_blocks
-            .insert(peer_id, (request_id, block));
+        self.pending_seed_blocks.push((peer_id, request_id, block));
     }
 
     /// Returns the `BttPeer` that's tracked with the `PeerId`
@@ -184,6 +183,42 @@ impl TorrentPieceHandler {
     /// Untrack current piece
     pub fn timeout_buffer(&mut self) -> Option<PieceBuffer> {
         self.piece_buffer.take()
+    }
+
+    pub fn remove_pending_seed_by_request(
+        &mut self,
+        req_id: &BittorrentRequestId,
+    ) -> Option<(PeerId, BlockMetadata)> {
+        let pos = self
+            .pending_seed_blocks
+            .iter()
+            .position(|(_, id, _)| *req_id == *id);
+
+        if let Some(pos) = pos {
+            let (peer, _, block) = self.pending_seed_blocks.remove(pos);
+            Some((peer, block))
+        } else {
+            None
+        }
+    }
+
+    /// removes the first peer and the requestid the peer is currently waiting
+    /// for the block
+    pub fn remove_pending_seed(
+        &mut self,
+        block: &BlockMetadata,
+    ) -> Option<(PeerId, BittorrentRequestId)> {
+        let pos = self
+            .pending_seed_blocks
+            .iter()
+            .position(|(_, _, meta)| *meta == *block);
+
+        if let Some(pos) = pos {
+            let (peer, id, _) = self.pending_seed_blocks.remove(pos);
+            Some((peer, id))
+        } else {
+            None
+        }
     }
 
     /// Returns the next piece to leech if the previous piece was finished and
@@ -264,12 +299,12 @@ impl TorrentPieceHandler {
         }
     }
 
-    pub fn add_block(&mut self, peerid: &PeerId, block: Block) -> Result<BlockMetadata, BlockErr> {
+    pub fn add_block(&mut self, peer: &PeerId, block: Block) -> Result<BlockMetadata, BlockErr> {
         if let Some(buffer) = &mut self.piece_buffer {
-            return buffer.add_block(peerid, block);
+            return buffer.add_block(peer, block);
         }
         Err(BlockErr::NotRequested {
-            peer_id: peerid.clone(),
+            peer: peer.clone(),
             block,
         })
     }
@@ -451,8 +486,8 @@ impl PieceBuffer {
     /// Adds the block in the buffer.
     ///
     /// If the `block`s metadata could not be validated, the block is returned
-    pub fn add_block(&mut self, peerid: &PeerId, block: Block) -> Result<BlockMetadata, BlockErr> {
-        if let Some((id, expected)) = self.pending_blocks.remove_entry(peerid) {
+    pub fn add_block(&mut self, peer: &PeerId, block: Block) -> Result<BlockMetadata, BlockErr> {
+        if let Some((id, expected)) = self.pending_blocks.remove_entry(peer) {
             // validate block
             if block.metadata() == expected {
                 self.blocks.insert(block.metadata().block_offset, block);
@@ -462,14 +497,14 @@ impl PieceBuffer {
                 self.missing_blocks.push(expected);
                 self.peers.push(id);
                 Err(BlockErr::InvalidBlock {
-                    peer_id: peerid.clone(),
+                    peer: peer.clone(),
                     expected: expected.clone(),
                     block,
                 })
             }
         } else {
             Err(BlockErr::NotRequested {
-                peer_id: peerid.clone(),
+                peer: peer.clone(),
                 block,
             })
         }

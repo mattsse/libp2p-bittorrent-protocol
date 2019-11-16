@@ -340,20 +340,20 @@ impl<TInner> TorrentPool<TInner> {
     /// Update the peer's latest heartbeat timestamp.
     pub fn on_keep_alive_by_remote(
         &mut self,
-        peer_id: PeerId,
+        peer: PeerId,
         new_heartbeat: Instant,
     ) -> KeepAliveResult {
         for torrent in self.torrents.values_mut() {
-            if let Some(old_heartbeat) = torrent.on_keep_alive_by_remote(&peer_id, &new_heartbeat) {
+            if let Some(old_heartbeat) = torrent.on_keep_alive_by_remote(&peer, &new_heartbeat) {
                 return Ok(KeepAliveOk::Remote {
-                    torrent_id: torrent.id(),
-                    peer_id,
+                    torrent: torrent.id(),
+                    peer,
                     old_heartbeat,
                     new_heartbeat,
                 });
             }
         }
-        Err(PeerError::NotFound(peer_id))
+        Err(PeerError::NotFound(peer))
     }
 
     /// Event handling for a [`PeerMessage::Interested`] or
@@ -413,9 +413,34 @@ impl<TInner> TorrentPool<TInner> {
             return torrent.add_block(peer_id, block);
         }
         Err(BlockErr::NotRequested {
-            peer_id: peer_id.clone(),
+            peer: peer_id.clone(),
             block,
         })
+    }
+
+    pub fn on_cancel_request(
+        &mut self,
+        id: BittorrentRequestId,
+    ) -> Option<(PeerId, BlockMetadata)> {
+        for torrent in self.torrents.values_mut() {
+            if let Some((peer, block)) = torrent.piece_handler.remove_pending_seed_by_request(&id) {
+                return Some((peer, block));
+            }
+        }
+        None
+    }
+
+    pub fn on_block_read(
+        &mut self,
+        torrent_id: TorrentId,
+        block: &BlockMetadata,
+    ) -> Option<(PeerId, BittorrentRequestId)> {
+        if let Some(torrent) = self.torrents.get_mut(&torrent_id) {
+            if let Some((peer, id)) = torrent.piece_handler.remove_pending_seed(block) {
+                return Some((peer, id));
+            }
+        }
+        None
     }
 
     /// Event handling for a [`BittorrentHandlerEvent::Have`].
@@ -486,7 +511,6 @@ impl<TInner> TorrentPool<TInner> {
     }
 
     /// returns all peers that are currently not related to the info hash
-    // TODO should changed to a lookup in DHT
     pub fn iter_candidate_peers<'a>(
         &'a self,
         info_hash: &'a ShaHash,

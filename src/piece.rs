@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::disk::block::BlockMetadata;
+use bytes::Bytes;
 
 /// smallest allowed piece size : 16 KB
 pub const BLOCK_SIZE_MIN: usize = 16384;
@@ -15,7 +16,7 @@ pub struct Piece {
     /// specifying the zero-based byte offset within the piece
     pub begin: u32,
     /// block of data, which is a subset of the piece specified by index.
-    pub block: Vec<u8>,
+    pub block: Bytes,
 }
 
 #[derive(Copy, Debug, Clone, Eq, PartialEq)]
