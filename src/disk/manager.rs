@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io;
 use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
@@ -13,15 +13,16 @@ use tokio_fs::OpenOptions;
 
 use crate::util::ShaHash;
 
-use crate::behavior::BittorrentEvent::LeechBlockResult;
 use crate::disk::block::{
     Block,
+    BlockFile,
     BlockFileRead,
     BlockFileWrite,
     BlockIn,
     BlockMetadata,
     BlockMut,
     BlockRead,
+    BlockResult,
     BlockWrite,
 };
 use crate::disk::error::TorrentError;
@@ -86,8 +87,7 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
     }
 
     fn sync_torrent(&mut self, id: TorrentId) {
-        if let Some(meta) = self.torrents.get(&id) {}
-        unimplemented!()
+        self.queued_events.push_back(DiskMessageIn::SyncTorrent(id))
     }
 
     fn get_torrent_files(&self, id: &TorrentId) -> Option<&HashSet<FileEntry>> {
@@ -98,11 +98,11 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
         }
     }
 
-    fn add_block_read(
+    fn poll_files(
         &mut self,
         id: TorrentId,
         meta: BlockMetadata,
-    ) -> Result<Async<DiskMessageOut>, TFileSystem::Error> {
+    ) -> Result<Async<BTreeMap<u64, BlockFile<TFileSystem::File>>>, TFileSystem::Error> {
         if let Some(torrent) = self.torrents.get(&id) {
             match torrent.files_for_block(meta.clone()) {
                 Ok(files) => {
@@ -141,48 +141,99 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                         }
                     }
                     if all_ready {
-                        let mut block = if queued_files.len() == 1 {
-                            let (id, fs, meta) = queued_files.remove(0);
+                        // multiple files for a block needed
+                        let mut blocks = BTreeMap::new();
+
+                        for (id, fs, meta) in queued_files {
+                            blocks.insert(meta.block_offset, BlockFile::new(id, fs));
+
                             self.file_cache
                                 .insert(id, FileState::Busy(meta.piece_index));
-                            BlockIn::Read(BlockRead::Single(BlockFileRead::new(id, fs, meta)))
-                        } else {
-                            let mut overlap = Vec::with_capacity(queued_files.len());
-
-                            for (id, fs, meta) in queued_files {
-                                overlap.push(BlockFileRead::new(id, fs, meta));
-                                self.file_cache
-                                    .insert(id, FileState::Busy(meta.piece_index));
-                            }
-
-                            BlockIn::Read(BlockRead::Overlap(overlap))
-                        };
-
-                        if block.poll(&mut self.file_system)?.is_ready() {
-                            // TODO
-                            panic!()
-                        } else {
-                            self.active_blocks.push(block);
-
-                            Ok(Async::NotReady)
                         }
+
+                        Ok(Async::Ready(blocks))
                     } else {
                         // add removed states back, but queued
                         for (id, fs, meta) in queued_files {
                             self.file_cache.insert(id, FileState::Queued(fs, meta));
                         }
-                        self.queued_events
-                            .push_back(DiskMessageIn::ReadBlock(id, meta));
                         Ok(Async::NotReady)
                     }
                 }
-                Err(e) => Ok(Async::Ready(DiskMessageOut::TorrentError(id, e))),
+                Err(e) => panic!(),
             }
         } else {
-            Ok(Async::Ready(DiskMessageOut::TorrentError(
-                id,
-                TorrentError::TorrentNotFound { id },
-            )))
+            panic!()
+            //            Ok(Async::Ready(DiskMessageOut::TorrentError(
+            //                id,
+            //                TorrentError::TorrentNotFound { id },
+            //            )))
+        }
+    }
+
+    fn poll_create_block_read(
+        &mut self,
+        id: TorrentId,
+        meta: BlockMetadata,
+    ) -> Result<Async<BlockIn<TFileSystem::File>>, TFileSystem::Error> {
+        if let Async::Ready(mut files) = self.poll_files(id, meta.clone())? {
+            if files.len() == 1 {
+                let (_, file) = files.into_iter().next().unwrap();
+
+                Ok(Async::Ready(BlockIn::Read(BlockRead::Single(
+                    BlockFileRead::new(file, meta),
+                ))))
+            } else {
+                let mut blocks = BTreeMap::new();
+
+                for (offset, file) in files {
+                    blocks.insert(offset, BlockFileRead::new(file, meta));
+                }
+                let block = BlockIn::Read(BlockRead::Overlap {
+                    torrent: id,
+                    blocks,
+                    metadata: meta,
+                });
+                Ok(Async::Ready(block))
+            }
+        } else {
+            Ok(Async::NotReady)
+        }
+    }
+
+    fn finalize_block(&mut self, block: BlockIn<TFileSystem::File>) -> DiskMessageOut {
+        match block.finalize() {
+            BlockResult::Read {
+                torrent,
+                result,
+                files,
+            } => {
+                for file in files {
+                    self.file_cache
+                        .insert(file.id, FileState::Ready(file.inner));
+                }
+                match result {
+                    Ok(block) => {
+                        // TODO validate against piece hash
+                        DiskMessageOut::BlockRead(torrent, block)
+                    }
+                    Err(metadata) => DiskMessageOut::ReadBlockError(torrent, metadata),
+                }
+            }
+            BlockResult::Write {
+                torrent,
+                result,
+                files,
+            } => {
+                for file in files {
+                    self.file_cache
+                        .insert(file.id, FileState::Ready(file.inner));
+                }
+                match result {
+                    Ok(block) => DiskMessageOut::BlockWritten(torrent, block),
+                    Err(metadata) => DiskMessageOut::WriteBlockError(torrent, metadata),
+                }
+            }
         }
     }
 }
@@ -193,76 +244,60 @@ impl<TFileSystem: FileSystem> Future for DiskManager<TFileSystem> {
 
     fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
         // remove each `block`s one by one, update file state or add them back
-        for b in (0..self.active_blocks.len()).rev() {
-            let mut block = self.active_blocks.swap_remove(b);
-            if block.poll(&mut self.file_system)?.is_ready() {
-                // TODO convert to diskmessage and add files back to cache
-                //                match block.into_block_out() {
-                //
-                //                }
-            } else {
-                self.active_blocks.push(block);
-            }
-        }
-
         loop {
-            if let Some(msg) = self.queued_events.pop_front() {
-                match msg {
-                    DiskMessageIn::AddTorrent(id, meta) => {
-                        let msg = if self.torrents.contains(&id) {
-                            DiskMessageOut::TorrentError(id, TorrentError::ExistingTorrent { meta })
-                        } else {
-                            self.torrents.insert(TorrentFile::new(id, meta));
-                            DiskMessageOut::TorrentAdded(id)
-                        };
-
-                        return Ok(Async::Ready(msg));
-                    }
-                    DiskMessageIn::RemoveTorrent(id) => {
-                        return Ok(Async::Ready(self.remove_torrent(id)));
-                    }
-                    DiskMessageIn::SyncTorrent(id) => {}
-                    DiskMessageIn::ReadBlock(id, metadata) => {
-                        //                        let block = BlockIn::Read(
-                        //                            BlockRead {
-                        //
-                        //                            }
-                        //                        );
-                    }
-                    DiskMessageIn::WriteBlock(id, block) => {
-                        println!("Write block received {:?} {:?}", id, block.metadata());
-                    }
+            for b in (0..self.active_blocks.len()).rev() {
+                let mut block = self.active_blocks.swap_remove(b);
+                if block.poll(&mut self.file_system)?.is_ready() {
+                    return Ok(Async::Ready(self.finalize_block(block)));
+                } else {
+                    self.active_blocks.push(block);
                 }
-            } else {
-                break;
             }
-            // TODO loop through all messages
-            // try to poll pending diskmessages directly
-            // skip busy files
 
-            //                if let Some(mut handles) =
-            // self.files.get_mut(&block.piece_index()) {
-            //
-            //                    for h in (0..handles.len()).rev() {
-            //                        let mut block = handles.swap_remove(h) {
-            //
-            //                        }
-            //                    }
-            //                } else {
-            //                    let (hash, files) =
-            //
-            // self.meta.info.files_for_piece_index(block.piece_index())?;
+            loop {
+                if let Some(msg) = self.queued_events.pop_front() {
+                    match msg {
+                        DiskMessageIn::AddTorrent(id, meta) => {
+                            let msg = if self.torrents.contains(&id) {
+                                DiskMessageOut::TorrentError(
+                                    id,
+                                    TorrentError::ExistingTorrent { meta },
+                                )
+                            } else {
+                                self.torrents.insert(TorrentFile::new(id, meta));
+                                DiskMessageOut::TorrentAdded(id)
+                            };
+                            return Ok(Async::Ready(msg));
+                        }
+                        DiskMessageIn::RemoveTorrent(id) => {
+                            return Ok(Async::Ready(self.remove_torrent(id)));
+                        }
+                        DiskMessageIn::SyncTorrent(id) => {}
+                        DiskMessageIn::ReadBlock(id, metadata) => {
+                            if let Async::Ready(block) =
+                                self.poll_create_block_read(id, metadata.clone())?
+                            {
+                                self.active_blocks.push(block);
+                                continue;
+                            } else {
+                                self.queued_events
+                                    .push_back(DiskMessageIn::ReadBlock(id, metadata));
+                                return Ok(Async::NotReady);
+                            }
+                        }
+                        DiskMessageIn::WriteBlock(id, block) => {
+                            debug!("Write block received {:?} {:?}", id, block.metadata());
+                        }
+                    }
+                } else {
+                    break;
+                }
+            }
 
-            //                }
-
-            // TODO validate the block if its complete
+            if self.queued_events.is_empty() {
+                return Ok(Async::NotReady);
+            }
         }
-
-        if self.queued_events.is_empty() {
-            return Ok(Async::NotReady);
-        }
-
-        Ok(Async::NotReady)
     }
 }
 

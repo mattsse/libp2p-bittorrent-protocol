@@ -1,16 +1,19 @@
 use std::io::SeekFrom;
 use std::ops::{Deref, DerefMut};
 
-use bytes::{Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use futures::Async;
 
 use crate::util::{ShaHash, SHA_HASH_LEN};
 
+use crate::behavior::BlockOk;
 use crate::disk::error::TorrentError;
 use crate::disk::file::TorrentFileId;
 use crate::disk::fs::FileSystem;
+use crate::peer::torrent::TorrentId;
 use crate::piece::Piece;
 use crate::proto::message::PeerRequest;
+use std::collections::BTreeMap;
 
 /// `BlockMetadata` which tracks metadata associated with a `Block` of memory.
 #[derive(Copy, Clone, Hash, PartialEq, Eq, Debug)]
@@ -96,6 +99,14 @@ impl Block {
     pub fn is_correct_len(&self) -> bool {
         self.block_data.len() == self.metadata.block_length
     }
+
+    pub fn into_piece(self) -> Piece {
+        self.into()
+    }
+
+    pub fn is_valid_len(&self) -> bool {
+        self.metadata.block_length == self.block_data.len()
+    }
 }
 
 impl From<BlockMut> for Block {
@@ -109,6 +120,16 @@ impl From<Piece> for Block {
         Self {
             metadata: BlockMetadata::new(piece.index as u64, piece.begin as u64, piece.block.len()),
             block_data: Bytes::from(piece.block),
+        }
+    }
+}
+
+impl Into<Piece> for Block {
+    fn into(self) -> Piece {
+        Piece {
+            index: self.metadata.piece_index as u32,
+            begin: self.metadata.block_offset as u32,
+            block: self.block_data,
         }
     }
 }
@@ -145,6 +166,10 @@ impl BlockMut {
         }
     }
 
+    pub fn is_valid_len(&self) -> bool {
+        self.metadata.block_length == self.block_data.len()
+    }
+
     pub fn bytes_mut(&mut self) -> &mut BytesMut {
         &mut self.block_data
     }
@@ -156,6 +181,11 @@ impl BlockMut {
 
     pub fn split_into(self) -> (BlockMetadata, BytesMut) {
         (self.metadata, self.block_data)
+    }
+
+    pub fn into_piece(self) -> Piece {
+        let block: Block = self.into();
+        block.into()
     }
 }
 
@@ -175,13 +205,16 @@ impl DerefMut for BlockMut {
 
 #[derive(Debug)]
 pub struct BlockFile<TFile> {
-    file_id: TorrentFileId,
-    file: TFile,
+    pub id: TorrentFileId,
+    pub inner: TFile,
 }
 
 impl<TFile> BlockFile<TFile> {
     pub fn new(file_id: TorrentFileId, file: TFile) -> Self {
-        Self { file_id, file }
+        Self {
+            id: file_id,
+            inner: file,
+        }
     }
 }
 
@@ -213,11 +246,11 @@ impl<TFile> BlockFileWrite<TFile> {
             BlockState::Ready => Ok(Async::Ready(())),
             BlockState::Seek => {
                 if let Async::Ready(_) = fs.poll_seek(
-                    &mut self.file.file,
+                    &mut self.file.inner,
                     SeekFrom::Start(self.block.metadata().block_offset),
                 )? {
                     if let Async::Ready(_) =
-                        fs.poll_write_block(&mut self.file.file, &mut self.block)?
+                        fs.poll_write_block(&mut self.file.inner, &mut self.block)?
                     {
                         self.state = BlockState::Ready;
                         Ok(Async::Ready(()))
@@ -231,7 +264,7 @@ impl<TFile> BlockFileWrite<TFile> {
             }
             BlockState::Process => {
                 if let Async::Ready(_) =
-                    fs.poll_write_block(&mut self.file.file, &mut self.block)?
+                    fs.poll_write_block(&mut self.file.inner, &mut self.block)?
                 {
                     self.state = BlockState::Ready;
                     Ok(Async::Ready(()))
@@ -264,9 +297,9 @@ pub struct BlockFileRead<TFile> {
 }
 
 impl<TFile> BlockFileRead<TFile> {
-    pub fn new(file_id: TorrentFileId, file: TFile, metadata: BlockMetadata) -> Self {
+    pub fn new(file: BlockFile<TFile>, metadata: BlockMetadata) -> Self {
         Self {
-            file: BlockFile::new(file_id, file),
+            file,
             block: BlockMut::empty_for_metadata(metadata),
             state: Default::default(),
         }
@@ -284,11 +317,11 @@ impl<TFile> BlockFileRead<TFile> {
             BlockState::Ready => Ok(Async::Ready(())),
             BlockState::Seek => {
                 if let Async::Ready(_) = fs.poll_seek(
-                    &mut self.file.file,
+                    &mut self.file.inner,
                     SeekFrom::Start(self.block.metadata().block_offset),
                 )? {
                     if let Async::Ready(_) =
-                        fs.poll_read_block(&mut self.file.file, &mut self.block)?
+                        fs.poll_read_block(&mut self.file.inner, &mut self.block)?
                     {
                         self.state = BlockState::Ready;
                         Ok(Async::Ready(()))
@@ -301,7 +334,9 @@ impl<TFile> BlockFileRead<TFile> {
                 }
             }
             BlockState::Process => {
-                if let Async::Ready(_) = fs.poll_read_block(&mut self.file.file, &mut self.block)? {
+                if let Async::Ready(_) =
+                    fs.poll_read_block(&mut self.file.inner, &mut self.block)?
+                {
                     self.state = BlockState::Ready;
                     Ok(Async::Ready(()))
                 } else {
@@ -319,10 +354,6 @@ pub enum BlockIn<TFile> {
 }
 
 impl<TFile> BlockIn<TFile> {
-    fn piece_index(&self) -> u64 {
-        unimplemented!()
-    }
-
     pub fn poll<TFileSystem: FileSystem<File = TFile>>(
         &mut self,
         fs: &mut TFileSystem,
@@ -330,9 +361,9 @@ impl<TFile> BlockIn<TFile> {
         match self {
             BlockIn::Read(read) => match read {
                 BlockRead::Single(block) => block.poll(fs),
-                BlockRead::Overlap(blocks) => {
+                BlockRead::Overlap { blocks, .. } => {
                     let mut ready = true;
-                    for block in blocks {
+                    for (_, block) in blocks {
                         if block.poll(fs)?.is_not_ready() {
                             ready = false;
                         }
@@ -347,9 +378,9 @@ impl<TFile> BlockIn<TFile> {
 
             BlockIn::Write(write) => match write {
                 BlockWrite::Single(block) => block.poll(fs),
-                BlockWrite::Overlap(blocks) => {
+                BlockWrite::Overlap { blocks, .. } => {
                     let mut ready = true;
-                    for block in blocks {
+                    for (_, block) in blocks {
                         if block.poll(fs)?.is_not_ready() {
                             ready = false;
                         }
@@ -364,10 +395,10 @@ impl<TFile> BlockIn<TFile> {
         }
     }
 
-    fn into_block_out(self) -> BlockOut<TFile> {
+    pub fn finalize(self) -> BlockResult<TFile> {
         match self {
-            BlockIn::Read(read) => BlockOut::Read(read),
-            BlockIn::Write(write) => BlockOut::Written(write),
+            BlockIn::Read(read) => read.finalize(),
+            BlockIn::Write(write) => write.finalize(),
         }
     }
 }
@@ -375,35 +406,137 @@ impl<TFile> BlockIn<TFile> {
 #[derive(Debug)]
 pub enum BlockRead<TFile> {
     Single(BlockFileRead<TFile>),
-    Overlap(Vec<BlockFileRead<TFile>>),
+    Overlap {
+        torrent: TorrentId,
+        metadata: BlockMetadata,
+        blocks: BTreeMap<u64, BlockFileRead<TFile>>,
+    },
 }
 
-impl<TFile> Into<BlockMut> for BlockRead<TFile> {
-    fn into(self) -> BlockMut {
+impl<TFile> BlockRead<TFile> {
+    pub fn finalize(self) -> BlockResult<TFile> {
         match self {
             BlockRead::Single(block) => {
-                block.block;
-            }
-            BlockRead::Overlap(blocks) => {}
-        };
+                let result = if block.block.is_valid_len() {
+                    Ok(block.block)
+                } else {
+                    Err(block.block.metadata)
+                };
 
-        unimplemented!()
+                BlockResult::Read {
+                    torrent: block.file.id.torrent,
+                    files: vec![block.file],
+                    result,
+                }
+            }
+            BlockRead::Overlap {
+                torrent,
+                blocks,
+                metadata,
+            } => {
+                let mut block = BytesMut::with_capacity(metadata.block_length);
+                let mut files = Vec::with_capacity(blocks.len());
+
+                let mut valid = true;
+
+                for (_, file) in blocks {
+                    if !file.block.is_valid_len() {
+                        valid = false;
+                    }
+                    files.push(file.file);
+                    if valid {
+                        block.put_slice(file.block.as_ref());
+                    }
+                }
+
+                let result = if valid {
+                    Ok(BlockMut::new(metadata, block))
+                } else {
+                    Err(metadata)
+                };
+
+                BlockResult::Read {
+                    torrent,
+                    files,
+                    result,
+                }
+            }
+        }
     }
 }
 
 #[derive(Debug)]
 pub enum BlockWrite<TFile> {
     Single(BlockFileWrite<TFile>),
-    Overlap(Vec<BlockFileWrite<TFile>>),
+    Overlap {
+        torrent: TorrentId,
+        metadata: BlockMetadata,
+        blocks: BTreeMap<u64, BlockFileWrite<TFile>>,
+    },
+}
+
+impl<TFile> BlockWrite<TFile> {
+    pub fn finalize(self) -> BlockResult<TFile> {
+        match self {
+            BlockWrite::Single(block) => {
+                let result = if block.block.is_valid_len() {
+                    Ok(block.block)
+                } else {
+                    Err(block.block.metadata)
+                };
+
+                BlockResult::Write {
+                    torrent: block.file.id.torrent,
+                    files: vec![block.file],
+                    result,
+                }
+            }
+            BlockWrite::Overlap {
+                torrent,
+                blocks,
+                metadata,
+            } => {
+                let mut block = BytesMut::with_capacity(metadata.block_length);
+                let mut files = Vec::with_capacity(blocks.len());
+
+                let mut valid = true;
+
+                for (_, file) in blocks {
+                    if !file.block.is_valid_len() {
+                        valid = false;
+                    }
+                    files.push(file.file);
+                    if valid {
+                        block.put_slice(file.block.as_ref());
+                    }
+                }
+
+                let result = if valid {
+                    Ok(Block::new(metadata, block.freeze()))
+                } else {
+                    Err(metadata)
+                };
+
+                BlockResult::Write {
+                    torrent,
+                    files,
+                    result,
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
-pub enum BlockOut<TFile> {
-    Read(BlockRead<TFile>),
-    Written(BlockWrite<TFile>),
-    /// Error occurring from a `LoadBlock` message.
-    LoadBlockError(TorrentError),
-    /// Error occurring from a `ProcessBlock` message.
-    ProcessBlockError(TorrentError),
-    FoundBadPiece(u64),
+pub enum BlockResult<TFile> {
+    Read {
+        torrent: TorrentId,
+        files: Vec<BlockFile<TFile>>,
+        result: Result<BlockMut, BlockMetadata>,
+    },
+    Write {
+        torrent: TorrentId,
+        files: Vec<BlockFile<TFile>>,
+        result: Result<Block, BlockMetadata>,
+    },
 }

@@ -32,7 +32,7 @@ impl TorrentFile {
                 let mut hs = HashSet::with_capacity(1);
                 hs.insert(FileEntry {
                     path: root_dir,
-                    id: TorrentFileId(id.0, 0),
+                    id: TorrentFileId::new(id, FileId(0)),
                     offset: 0,
                     size: *length,
                 });
@@ -43,7 +43,7 @@ impl TorrentFile {
                     (0, 0, HashSet::with_capacity(files.len())),
                     |(file_index, offset, mut files), file| {
                         let entry = FileEntry {
-                            id: TorrentFileId(id.0, file_index),
+                            id: TorrentFileId::new(id, FileId(file_index)),
                             offset,
                             path: root_dir.join(file.relative_file_path()),
                             size: file.length,
@@ -191,4 +191,13 @@ pub struct FileStorage {
 pub struct FileId(pub usize);
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct TorrentFileId(usize, usize);
+pub struct TorrentFileId {
+    pub torrent: TorrentId,
+    pub file: FileId,
+}
+
+impl TorrentFileId {
+    pub fn new(torrent: TorrentId, file: FileId) -> Self {
+        Self { torrent, file }
+    }
+}

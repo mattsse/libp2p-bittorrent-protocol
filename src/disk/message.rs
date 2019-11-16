@@ -44,20 +44,14 @@ pub enum DiskMessageOut {
     TorrentRemoved(TorrentId, MetaInfo),
     /// Message indicating that the torrent has been synced.
     TorrentSynced(TorrentId),
-    /// Message indicating that a good piece has been identified for
-    /// the given torrent (hash), as well as the piece index.
-    FoundGoodPiece(TorrentId, u64),
-    /// Message indicating that a bad piece has been identified for
-    /// the given torrent (hash), as well as the piece index.
-    FoundBadPiece(TorrentId, u64),
-    /// Message indicating that the given block has been loaded.
+    /// Message indicating that the given block has been successfully loaded.
     BlockRead(TorrentId, BlockMut),
-    /// Message indicating that the given block has been processed.
+    /// Message indicating that the given block has been successfully processed.
     BlockWritten(TorrentId, Block),
     /// Error occurring from a `AddTorrent` or `RemoveTorrent` message.
     TorrentError(TorrentId, TorrentError),
-    /// Error occurring from a `LoadBlock` message.
-    LoadBlockError(BlockMut, TorrentError),
-    /// Error occurring from a `ProcessBlock` message.
-    ProcessBlockError(TorrentId, TorrentError),
+    /// Error occurring from a `ReadBlock` message.
+    ReadBlockError(TorrentId, BlockMetadata),
+    /// Error occurring from a `WriteBlock` message.
+    WriteBlockError(TorrentId, BlockMetadata),
 }
