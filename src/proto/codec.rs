@@ -2,7 +2,7 @@ use std::convert::TryInto;
 use std::io::{self, Read};
 
 use byteorder::{BigEndian, ByteOrder};
-use bytes::{Buf, BufMut, BytesMut, IntoBuf};
+use bytes::{Buf, BufMut, Bytes, BytesMut, IntoBuf};
 use tokio_codec::{Decoder, Encoder};
 
 use crate::bitfield::BitField;
@@ -157,7 +157,7 @@ impl Decoder for PeerWireCodec {
                                 piece: Piece {
                                     index: BigEndian::read_u32(&msg[5..9]),
                                     begin: BigEndian::read_u32(&msg[9..13]),
-                                    block: msg[13..].to_vec(),
+                                    block: Bytes::from(msg[13..].to_vec()),
                                 },
                             }))
                         }
