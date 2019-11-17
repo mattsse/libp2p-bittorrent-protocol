@@ -390,7 +390,7 @@ impl<TFile> BlockIn<TFile> {
                 BlockRead::Single(block) => block.poll(fs),
                 BlockRead::Overlap { blocks, .. } => {
                     let mut ready = true;
-                    for (_, block) in blocks {
+                    for block in blocks {
                         if block.poll(fs)?.is_not_ready() {
                             ready = false;
                         }
@@ -407,7 +407,7 @@ impl<TFile> BlockIn<TFile> {
                 BlockWrite::Single(block) => block.poll(fs),
                 BlockWrite::Overlap { blocks, .. } => {
                     let mut ready = true;
-                    for (_, block) in blocks {
+                    for block in blocks {
                         if block.poll(fs)?.is_not_ready() {
                             ready = false;
                         }
@@ -450,7 +450,7 @@ pub enum BlockRead<TFile> {
     Overlap {
         torrent: TorrentId,
         metadata: BlockMetadata,
-        blocks: BTreeMap<u64, BlockFileRead<TFile>>,
+        blocks: Vec<BlockFileRead<TFile>>,
     },
 }
 
@@ -461,7 +461,7 @@ impl<TFile> BlockRead<TFile> {
                 let result = if block.block.is_valid_len() {
                     Ok(block.block)
                 } else {
-                    debug!(
+                    error!(
                         "Invalid block length, got {:?}, expected {:?}",
                         block.block.block_data.len(),
                         block.block.metadata
@@ -485,7 +485,7 @@ impl<TFile> BlockRead<TFile> {
 
                 let mut valid = true;
 
-                for (_, file) in blocks {
+                for file in blocks {
                     if !file.block.is_valid_len() {
                         valid = false;
                     }
@@ -517,7 +517,7 @@ pub enum BlockWrite<TFile> {
     Overlap {
         torrent: TorrentId,
         metadata: BlockMetadata,
-        blocks: BTreeMap<u64, BlockFileWrite<TFile>>,
+        blocks: Vec<BlockFileWrite<TFile>>,
     },
 }
 
@@ -547,7 +547,7 @@ impl<TFile> BlockWrite<TFile> {
 
                 let mut valid = true;
 
-                for (_, file) in blocks {
+                for file in blocks {
                     if !file.block.is_valid_len() {
                         valid = false;
                     }

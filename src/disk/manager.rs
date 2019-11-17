@@ -102,12 +102,14 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
         }
     }
 
+    // TODO dont sort by block offset in case of multiple files,
+    // use a normal vector instead
     fn poll_files(
         &mut self,
         id: TorrentId,
         meta: BlockMetadata,
     ) -> Result<
-        Async<Result<BTreeMap<u64, (BlockMetadata, BlockFile<TFileSystem::File>)>, TorrentError>>,
+        Async<Result<Vec<(BlockMetadata, BlockFile<TFileSystem::File>)>, TorrentError>>,
         TFileSystem::Error,
     > {
         if let Some(torrent) = self.torrents.get(&id) {
@@ -149,10 +151,10 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                     }
                     if all_ready {
                         // multiple files for a block needed
-                        let mut blocks = BTreeMap::new();
+                        let mut blocks = Vec::with_capacity(queued_files.len());
 
                         for (id, file, meta) in queued_files {
-                            blocks.insert(meta.block_offset, (meta, BlockFile::new(id, file)));
+                            blocks.push((meta, BlockFile::new(id, file)));
 
                             self.file_cache
                                 .insert(id, FileState::Busy(meta.piece_index));
@@ -202,16 +204,16 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
             match res {
                 Ok(files) => {
                     if files.len() == 1 {
-                        let (_, (_, file)) = files.into_iter().next().unwrap();
+                        let (_, file) = files.into_iter().next().unwrap();
 
                         Ok(Async::Ready(Ok(BlockIn::Write(BlockWrite::Single(
                             BlockFileWrite::new(file, block),
                         )))))
                     } else {
-                        let mut blocks = BTreeMap::new();
+                        let mut blocks = Vec::with_capacity(files.len());
                         let metadata = block.metadata();
 
-                        for (offset, (fragment_metadata, file)) in files {
+                        for (fragment_metadata, file) in files {
                             // adjust blocks
                             let fragment = Block::new(
                                 fragment_metadata,
@@ -221,7 +223,7 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                                 ),
                             );
 
-                            blocks.insert(offset, BlockFileWrite::new(file, fragment));
+                            blocks.push(BlockFileWrite::new(file, fragment));
                         }
                         let block = BlockIn::Write(BlockWrite::Overlap {
                             torrent: id,
@@ -252,15 +254,15 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
             match res {
                 Ok(files) => {
                     if files.len() == 1 {
-                        let (_, (meta, file)) = files.into_iter().next().unwrap();
+                        let (meta, file) = files.into_iter().next().unwrap();
                         Ok(Async::Ready(Ok(BlockIn::Read(BlockRead::Single(
                             BlockFileRead::new(file, meta),
                         )))))
                     } else {
-                        let mut blocks = BTreeMap::new();
+                        let mut blocks = Vec::with_capacity(files.len());
 
-                        for (offset, (meta, file)) in files {
-                            blocks.insert(offset, BlockFileRead::new(file, meta));
+                        for (meta, file) in files {
+                            blocks.push(BlockFileRead::new(file, meta));
                         }
                         let block = BlockIn::Read(BlockRead::Overlap {
                             torrent: id,

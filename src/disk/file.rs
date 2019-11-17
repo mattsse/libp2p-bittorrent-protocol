@@ -89,6 +89,7 @@ impl TorrentFile {
     /// return all files that are related to the targeted block
     /// in case there is an overlap, multi entries with their adjusted metadatas
     /// are returned
+    // TODO adjust the offsets for the files
     pub fn files_for_block(
         &self,
         metadata: BlockMetadata,
