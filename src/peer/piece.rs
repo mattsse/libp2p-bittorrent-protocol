@@ -562,7 +562,7 @@ impl PieceBuffer {
             missing_blocks,
             piece_index,
             blocks: Default::default(),
-            piece_length: 0,
+            piece_length,
             peers,
             total_blocks,
             last_block_size,

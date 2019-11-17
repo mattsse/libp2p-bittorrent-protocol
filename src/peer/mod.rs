@@ -154,12 +154,12 @@ impl BttPeer {
     }
 
     /// The client is currently choked by the remote
-    pub fn is_choked_on_remote(&self) -> bool {
+    pub fn is_client_choked_on_remote(&self) -> bool {
         self.remote_choke == ChokeType::Choked
     }
 
     /// The client is currently choked by the remote
-    pub fn is_unchoked_on_remote(&self) -> bool {
+    pub fn is_client_unchoked_on_remote(&self) -> bool {
         self.remote_choke == ChokeType::UnChoked
     }
 
@@ -174,12 +174,12 @@ impl BttPeer {
     }
 
     /// The remote is currently choked by the client side
-    pub fn is_choked_on_client(&self) -> bool {
+    pub fn is_remote_choked_on_client(&self) -> bool {
         self.client_choke == ChokeType::Choked
     }
 
     /// The client is currently choked by the remote
-    pub fn is_unchoked_on_client(&self) -> bool {
+    pub fn is_remote_unchoked_on_client(&self) -> bool {
         self.client_choke == ChokeType::UnChoked
     }
 
@@ -188,7 +188,7 @@ impl BttPeer {
     /// A download only is possible if the client is interested and the is not
     /// choked by the remote and the bitfield was sent to the client
     pub fn remote_can_seed(&self) -> bool {
-        self.is_unchoked_on_remote() && self.is_client_interested() && self.has_bitfield()
+        self.is_client_unchoked_on_remote() && self.is_client_interested() && self.has_bitfield()
     }
 
     /// Whether or not requests by the remote are answered by the client
@@ -196,7 +196,7 @@ impl BttPeer {
     /// To send a piece to remote the remote must be interested and not be
     /// choked by the client
     pub fn remote_can_leech(&self) -> bool {
-        self.is_unchoked_on_client() && self.is_remote_interested()
+        self.is_remote_unchoked_on_client() && self.is_remote_interested()
     }
 
     pub fn remote_can_seed_piece(&self, piece_index: usize) -> bool {

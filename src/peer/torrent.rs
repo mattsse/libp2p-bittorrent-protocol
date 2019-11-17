@@ -206,6 +206,11 @@ impl<TInner> TorrentPool<TInner> {
     pub fn unchoke_remote(&mut self, peer_id: &PeerId) -> Result<TorrentId, ()> {
         for torrent in self.torrents.values_mut() {
             if torrent.unchoke_remote(peer_id).is_some() {
+                debug!(
+                    "Unchoked remote {:?} for torrent {:?}",
+                    peer_id,
+                    torrent.id()
+                );
                 return Ok(torrent.id());
             }
         }
@@ -573,7 +578,6 @@ impl<TInner> TorrentPool<TInner> {
     }
 
     pub fn poll(&mut self, now: Instant) -> TorrentPoolState<TInner> {
-        println!("polled pool.");
         for torrent in self.iter_active_mut() {
             match torrent.poll(now) {
                 TorrentPoolState::Idle => continue,
@@ -743,20 +747,20 @@ impl<TInner> Torrent<TInner> {
         self.piece_handler.set_client_interest(peer_id, interest)
     }
 
-    fn set_choke_remote(&mut self, peer: &PeerId, choke: ChokeType) -> Option<ChokeType> {
+    fn set_choke_for_remote(&mut self, peer: &PeerId, choke: ChokeType) -> Option<ChokeType> {
         if let Some(peer) = self.piece_handler.peers.get_mut(peer) {
-            Some(std::mem::replace(&mut peer.remote_choke, choke))
+            Some(std::mem::replace(&mut peer.client_choke, choke))
         } else {
             None
         }
     }
 
     pub fn unchoke_remote(&mut self, peer: &PeerId) -> Option<ChokeType> {
-        self.set_choke_remote(peer, ChokeType::UnChoked)
+        self.set_choke_for_remote(peer, ChokeType::UnChoked)
     }
 
     pub fn choke_remote(&mut self, peer: &PeerId) -> Option<ChokeType> {
-        self.set_choke_remote(peer, ChokeType::Choked)
+        self.set_choke_for_remote(peer, ChokeType::Choked)
     }
 
     /// Update the peer's bitfield.
