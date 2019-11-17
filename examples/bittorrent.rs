@@ -55,6 +55,7 @@ fn main() {
     let transport = build_development_transport(local_key);
 
     let tmp_dir = tempdir().expect("Failed to create temp dir");
+    println!("Initialized tmp dir {}", tmp_dir.path().display());
 
     let native_fs = NativeFileSystem::from(tmp_dir.path());
     let config = BittorrentConfig::default();
@@ -172,6 +173,17 @@ fn main() {
                     println!("choke error: {:?}", err);
                 }
             },
+            Async::Ready(Some(BittorrentEvent::HaveResult(res))) => match res {
+                Ok(ok) => {
+                    println!("have ok: {:?}", ok);
+                }
+                Err(err) => {
+                    println!("have error: {:?}", err);
+                }
+            },
+            Async::Ready(Some(BittorrentEvent::TorrentFinished(torrent))) => {
+                println!("Torrent finished {:?}", torrent);
+            }
             Async::Ready(Some(_)) => {}
             Async::Ready(None) | Async::NotReady => {
                 if !listening {
