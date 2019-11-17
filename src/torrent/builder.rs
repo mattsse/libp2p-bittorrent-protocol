@@ -1,5 +1,5 @@
 use std::cmp::max;
-use std::io::{self, BufReader, Read};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, TimeZone, Utc};
@@ -285,7 +285,7 @@ impl TorrentBuilder {
     }
 
     /// returns the length of the file and the hashed pieces and potential
-    /// unfinished bits
+    /// unfinished parts
     fn read_file<P: AsRef<Path>>(
         &self,
         path: P,
@@ -299,7 +299,7 @@ impl TorrentBuilder {
             paths: self.file_info_paths(path)?,
         };
 
-        let mut file = BufReader::new(::std::fs::File::open(path)?);
+        let mut file = ::std::fs::File::open(path)?;
         let mut pieces = Vec::with_capacity(length / piece_length);
         let mut total_read = 0;
         let mut piece_overlap = None;
@@ -307,8 +307,8 @@ impl TorrentBuilder {
         if let Some((previous_read, mut hasher)) = overlap {
             let left = piece_length - previous_read;
             if left <= length {
-                let mut buf = Vec::with_capacity(left);
-                file.read_exact(&mut buf)?;
+                let mut buf = vec![0; left];
+                file.read_exact(buf.as_mut_slice())?;
                 hasher.update(&buf);
                 pieces.push(hasher);
                 total_read += left;
@@ -337,14 +337,14 @@ impl TorrentBuilder {
                 break;
             }
             if piece_length > left {
-                let mut buf = Vec::with_capacity(left);
-                let exact = file.read_exact(&mut buf)?;
+                let mut buf = vec![0; left];
+                file.read_exact(buf.as_mut_slice())?;
                 let hasher = Sha1::from(&buf);
                 piece_overlap = Some((left, hasher));
                 break;
             }
-            let mut buf = Vec::with_capacity(piece_length);
-            file.read_exact(&mut buf)?;
+            let mut buf = vec![0; piece_length];
+            file.read_exact(buf.as_mut_slice())?;
             pieces.push(Sha1::from(&buf));
             total_read += piece_length;
         }
