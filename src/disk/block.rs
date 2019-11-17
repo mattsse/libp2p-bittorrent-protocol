@@ -8,7 +8,7 @@ use crate::util::{ShaHash, SHA_HASH_LEN};
 
 use crate::behavior::BlockOk;
 use crate::disk::error::TorrentError;
-use crate::disk::file::TorrentFileId;
+use crate::disk::file::{FileWindow, TorrentFileId};
 use crate::disk::fs::FileSystem;
 use crate::peer::torrent::TorrentId;
 use crate::piece::Piece;
@@ -90,6 +90,10 @@ impl Block {
     /// Access the metadata for the block.
     pub fn metadata(&self) -> BlockMetadata {
         self.metadata
+    }
+
+    pub fn into_bytes(self) -> Bytes {
+        self.block_data
     }
 
     pub fn into_parts(self) -> (BlockMetadata, Bytes) {
@@ -222,22 +226,20 @@ impl<TFile> BlockFile<TFile> {
 pub struct BlockFileWrite<TFile> {
     file: BlockFile<TFile>,
     written: usize,
-    block: Block,
+    block: Bytes,
+    file_window: FileWindow,
     state: BlockState,
 }
 
 impl<TFile> BlockFileWrite<TFile> {
-    pub fn new(file: BlockFile<TFile>, block: Block) -> Self {
+    pub fn new(file: BlockFile<TFile>, block: Bytes, file_window: FileWindow) -> Self {
         Self {
             file,
             block,
+            file_window,
             written: 0,
             state: Default::default(),
         }
-    }
-
-    pub fn metadata(&self) -> &BlockMetadata {
-        &self.block.metadata
     }
 
     pub fn poll<TFileSystem: FileSystem<File = TFile>>(
@@ -249,14 +251,14 @@ impl<TFile> BlockFileWrite<TFile> {
             BlockState::Seek => {
                 if let Async::Ready(_) = fs.poll_seek(
                     &mut self.file.inner,
-                    SeekFrom::Start(self.block.metadata().block_offset),
+                    SeekFrom::Start(self.file_window.offset),
                 )? {
                     if let Async::Ready(written) = fs.poll_write_block(
                         &mut self.file.inner,
-                        &self.block[self.written..self.block.metadata.block_length],
+                        &self.block[self.written..self.file_window.length as usize],
                     )? {
                         self.written += written;
-                        if self.written < self.metadata().block_length {
+                        if self.written < self.file_window.length as usize {
                             Ok(Async::NotReady)
                         } else {
                             self.state = BlockState::Ready;
@@ -273,10 +275,10 @@ impl<TFile> BlockFileWrite<TFile> {
             BlockState::Process => {
                 if let Async::Ready(written) = fs.poll_write_block(
                     &mut self.file.inner,
-                    &self.block[self.written..self.block.metadata.block_length],
+                    &self.block[self.written..self.file_window.length as usize],
                 )? {
                     self.written += written;
-                    if self.written < self.metadata().block_length {
+                    if self.written < self.file_window.length as usize {
                         Ok(Async::NotReady)
                     } else {
                         self.state = BlockState::Ready;
@@ -306,23 +308,21 @@ impl Default for BlockState {
 #[derive(Debug)]
 pub struct BlockFileRead<TFile> {
     file: BlockFile<TFile>,
-    block: BlockMut,
+    block: BytesMut,
+    file_window: FileWindow,
     read: usize,
     state: BlockState,
 }
 
 impl<TFile> BlockFileRead<TFile> {
-    pub fn new(file: BlockFile<TFile>, metadata: BlockMetadata) -> Self {
+    pub fn new(file: BlockFile<TFile>, file_window: FileWindow) -> Self {
         Self {
             file,
-            block: BlockMut::empty_for_metadata(metadata),
+            block: BytesMut::with_capacity(file_window.length as usize),
+            file_window,
             read: 0,
             state: Default::default(),
         }
-    }
-
-    pub fn metadata(&self) -> &BlockMetadata {
-        &self.block.metadata
     }
 
     pub fn poll<TFileSystem: FileSystem<File = TFile>>(
@@ -335,13 +335,13 @@ impl<TFile> BlockFileRead<TFile> {
                 // TODO adjust offset
                 if let Async::Ready(pos) = fs.poll_seek(
                     &mut self.file.inner,
-                    SeekFrom::Start(self.block.metadata().block_offset),
+                    SeekFrom::Start(self.file_window.offset),
                 )? {
                     if let Async::Ready(read) =
                         fs.poll_read_block(&mut self.file.inner, &mut self.block)?
                     {
                         self.read += read;
-                        if self.read < self.metadata().block_length {
+                        if self.read < self.file_window.length as usize {
                             Ok(Async::NotReady)
                         } else {
                             self.state = BlockState::Ready;
@@ -360,7 +360,7 @@ impl<TFile> BlockFileRead<TFile> {
                     fs.poll_read_block(&mut self.file.inner, &mut self.block)?
                 {
                     self.read += read;
-                    if self.read < self.metadata().block_length {
+                    if self.read < self.file_window.length as usize {
                         Ok(Async::NotReady)
                     } else {
                         self.state = BlockState::Ready;
@@ -387,7 +387,7 @@ impl<TFile> BlockIn<TFile> {
     ) -> Result<Async<()>, TFileSystem::Error> {
         match self {
             BlockIn::Read(read) => match read {
-                BlockRead::Single(block) => block.poll(fs),
+                BlockRead::Single { metadata, block } => block.poll(fs),
                 BlockRead::Overlap { blocks, .. } => {
                     let mut ready = true;
                     for block in blocks {
@@ -404,7 +404,7 @@ impl<TFile> BlockIn<TFile> {
             },
 
             BlockIn::Write(write) => match write {
-                BlockWrite::Single(block) => block.poll(fs),
+                BlockWrite::Single { metadata, block } => block.poll(fs),
                 BlockWrite::Overlap { blocks, .. } => {
                     let mut ready = true;
                     for block in blocks {
@@ -446,7 +446,10 @@ impl<TFile> BlockIn<TFile> {
 
 #[derive(Debug)]
 pub enum BlockRead<TFile> {
-    Single(BlockFileRead<TFile>),
+    Single {
+        metadata: BlockMetadata,
+        block: BlockFileRead<TFile>,
+    },
     Overlap {
         torrent: TorrentId,
         metadata: BlockMetadata,
@@ -457,20 +460,21 @@ pub enum BlockRead<TFile> {
 impl<TFile> BlockRead<TFile> {
     pub fn finalize(self) -> BlockResult<TFile> {
         match self {
-            BlockRead::Single(block) => {
-                let result = if block.block.is_valid_len() {
-                    Ok(block.block)
+            BlockRead::Single { metadata, block } => {
+                let torrent = block.file.id.torrent;
+                let result = if block.block.len() == block.file_window.length as usize {
+                    Ok(BlockMut::new(metadata, block.block))
                 } else {
                     error!(
                         "Invalid block length, got {:?}, expected {:?}",
-                        block.block.block_data.len(),
-                        block.block.metadata
+                        block.block.len(),
+                        metadata
                     );
-                    Err(block.block.metadata)
+                    Err(metadata)
                 };
 
                 BlockResult::Read {
-                    torrent: block.file.id.torrent,
+                    torrent,
                     files: vec![block.file],
                     result,
                 }
@@ -486,7 +490,7 @@ impl<TFile> BlockRead<TFile> {
                 let mut valid = true;
 
                 for file in blocks {
-                    if !file.block.is_valid_len() {
+                    if !file.block.len() != file.file_window.length as usize {
                         valid = false;
                     }
                     files.push(file.file);
@@ -513,7 +517,10 @@ impl<TFile> BlockRead<TFile> {
 
 #[derive(Debug)]
 pub enum BlockWrite<TFile> {
-    Single(BlockFileWrite<TFile>),
+    Single {
+        metadata: BlockMetadata,
+        block: BlockFileWrite<TFile>,
+    },
     Overlap {
         torrent: TorrentId,
         metadata: BlockMetadata,
@@ -524,15 +531,16 @@ pub enum BlockWrite<TFile> {
 impl<TFile> BlockWrite<TFile> {
     pub fn finalize(self) -> BlockResult<TFile> {
         match self {
-            BlockWrite::Single(block) => {
-                let result = if block.block.is_valid_len() {
-                    Ok(block.block)
+            BlockWrite::Single { metadata, block } => {
+                let torrent = block.file.id.torrent;
+                let result = if block.written == block.file_window.length as usize {
+                    Ok(Block::new(metadata, block.block))
                 } else {
-                    Err(block.block.metadata)
+                    Err(metadata)
                 };
 
                 BlockResult::Write {
-                    torrent: block.file.id.torrent,
+                    torrent,
                     files: vec![block.file],
                     result,
                 }
@@ -548,7 +556,7 @@ impl<TFile> BlockWrite<TFile> {
                 let mut valid = true;
 
                 for file in blocks {
-                    if !file.block.is_valid_len() {
+                    if !file.written != file.block.len() {
                         valid = false;
                     }
                     files.push(file.file);

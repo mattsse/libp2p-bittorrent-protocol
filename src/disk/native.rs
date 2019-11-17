@@ -12,6 +12,7 @@ use crate::disk::block::{Block, BlockMut};
 use crate::disk::error::TorrentError;
 use crate::disk::fs::FileSystem;
 use crate::torrent::MetaInfo;
+use bytes::BufMut;
 
 /// File that exists on disk.
 pub struct NativeFile {
@@ -78,12 +79,12 @@ impl FileSystem for NativeFileSystem {
         file.poll_seek(seek)
     }
 
-    fn poll_read_block(
+    fn poll_read_block<B: BufMut>(
         &self,
         file: &mut Self::File,
-        block: &mut BlockMut,
+        block: &mut B,
     ) -> Result<Async<usize>, Self::Error> {
-        file.read_buf(block.bytes_mut())
+        file.read_buf(block)
     }
 
     fn poll_write_block(

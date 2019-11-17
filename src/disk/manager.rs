@@ -27,7 +27,7 @@ use crate::disk::block::{
 };
 use crate::disk::error::TorrentError;
 use crate::disk::error::TorrentError::TorrentNotFound;
-use crate::disk::file::{FileEntry, TorrentFile, TorrentFileId};
+use crate::disk::file::{FileEntry, FileWindow, TorrentFile, TorrentFileId};
 use crate::disk::fs::FileSystem;
 use crate::disk::message::{DiskMessageIn, DiskMessageOut};
 use crate::disk::native::NativeFileSystem;
@@ -109,7 +109,7 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
         id: TorrentId,
         meta: BlockMetadata,
     ) -> Result<
-        Async<Result<Vec<(BlockMetadata, BlockFile<TFileSystem::File>)>, TorrentError>>,
+        Async<Result<Vec<(FileWindow, BlockFile<TFileSystem::File>)>, TorrentError>>,
         TFileSystem::Error,
     > {
         if let Some(torrent) = self.torrents.get(&id) {
@@ -120,17 +120,17 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                     let mut queued_files = Vec::with_capacity(files.len());
                     let mut all_ready = true;
 
-                    for (file, metadata) in files {
+                    for (file, window) in files {
                         if let Some(state) = self.file_cache.remove(&file.id) {
                             match state {
                                 FileState::Ready(fs_file) => {
-                                    queued_files.push((file.id, fs_file, metadata));
+                                    queued_files.push((file.id, fs_file, window));
                                 }
-                                FileState::Queued(fs_file, queued_meta) => {
-                                    if metadata != queued_meta {
+                                FileState::Queued(fs_file, queued_window) => {
+                                    if window != queued_window {
                                         all_ready = false;
                                     }
-                                    queued_files.push((file.id, fs_file, metadata));
+                                    queued_files.push((file.id, fs_file, window));
                                 }
                                 FileState::Busy(piece) => {
                                     all_ready = false;
@@ -142,7 +142,7 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                             if let Async::Ready(fs_file) =
                                 self.file_system.poll_open_file(&file.path)?
                             {
-                                queued_files.push((file.id, fs_file, metadata));
+                                queued_files.push((file.id, fs_file, window));
                             } else {
                                 all_ready = false;
                                 break;
@@ -153,18 +153,17 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                         // multiple files for a block needed
                         let mut blocks = Vec::with_capacity(queued_files.len());
 
-                        for (id, file, meta) in queued_files {
-                            blocks.push((meta, BlockFile::new(id, file)));
+                        for (id, file, window) in queued_files {
+                            blocks.push((window, BlockFile::new(id, file)));
 
-                            self.file_cache
-                                .insert(id, FileState::Busy(meta.piece_index));
+                            self.file_cache.insert(id, FileState::Busy(window));
                         }
 
                         Ok(Async::Ready(Ok(blocks)))
                     } else {
                         // add removed states back, but queued
-                        for (id, file, meta) in queued_files {
-                            self.file_cache.insert(id, FileState::Queued(file, meta));
+                        for (id, file, window) in queued_files {
+                            self.file_cache.insert(id, FileState::Queued(file, window));
                         }
                         Ok(Async::NotReady)
                     }
@@ -194,7 +193,7 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
     ) -> Result<Async<Result<BlockIn<TFileSystem::File>, TorrentError>>, TFileSystem::Error> {
         // validate piece hash
         if !self.is_good_piece(id, &block) {
-            debug!("Piece hash mismatch {:?}", block.len());
+            error!("Piece hash mismatch {:?}", block.len());
             return Ok(Async::Ready(Err(TorrentError::BadPiece {
                 index: block.metadata().piece_index,
             })));
@@ -204,26 +203,22 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
             match res {
                 Ok(files) => {
                     if files.len() == 1 {
-                        let (_, file) = files.into_iter().next().unwrap();
+                        let (window, file) = files.into_iter().next().unwrap();
 
-                        Ok(Async::Ready(Ok(BlockIn::Write(BlockWrite::Single(
-                            BlockFileWrite::new(file, block),
-                        )))))
+                        Ok(Async::Ready(Ok(BlockIn::Write(BlockWrite::Single {
+                            metadata: block.metadata(),
+                            block: BlockFileWrite::new(file, block.into_bytes(), window),
+                        }))))
                     } else {
                         let mut blocks = Vec::with_capacity(files.len());
                         let metadata = block.metadata();
 
-                        for (fragment_metadata, file) in files {
+                        for (window, file) in files {
                             // adjust blocks
-                            let fragment = Block::new(
-                                fragment_metadata,
-                                Bytes::from(
-                                    &block[fragment_metadata.block_offset as usize
-                                        ..fragment_metadata.block_length],
-                                ),
-                            );
+                            let fragment =
+                                Bytes::from(&block[window.offset as usize..window.length as usize]);
 
-                            blocks.push(BlockFileWrite::new(file, fragment));
+                            blocks.push(BlockFileWrite::new(file, fragment, window));
                         }
                         let block = BlockIn::Write(BlockWrite::Overlap {
                             torrent: id,
@@ -254,15 +249,16 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
             match res {
                 Ok(files) => {
                     if files.len() == 1 {
-                        let (meta, file) = files.into_iter().next().unwrap();
-                        Ok(Async::Ready(Ok(BlockIn::Read(BlockRead::Single(
-                            BlockFileRead::new(file, meta),
-                        )))))
+                        let (window, file) = files.into_iter().next().unwrap();
+                        Ok(Async::Ready(Ok(BlockIn::Read(BlockRead::Single {
+                            metadata: meta,
+                            block: BlockFileRead::new(file, window),
+                        }))))
                     } else {
                         let mut blocks = Vec::with_capacity(files.len());
 
-                        for (meta, file) in files {
-                            blocks.push(BlockFileRead::new(file, meta));
+                        for (window, file) in files {
+                            blocks.push(BlockFileRead::new(file, window));
                         }
                         let block = BlockIn::Read(BlockRead::Overlap {
                             torrent: id,
@@ -407,7 +403,7 @@ impl<TFileSystem: FileSystem> Future for DiskManager<TFileSystem> {
 }
 
 pub enum FileState<TFile> {
-    Queued(TFile, BlockMetadata),
+    Queued(TFile, FileWindow),
     Ready(TFile),
-    Busy(u64),
+    Busy(FileWindow),
 }

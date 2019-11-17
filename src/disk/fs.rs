@@ -5,6 +5,7 @@ use std::path::Path;
 use futures::Async;
 
 use crate::disk::block::{Block, BlockMut};
+use bytes::BufMut;
 
 /// Trait for performing operations on some file system.
 /// Provides the necessary abstractions for handling files
@@ -39,10 +40,10 @@ pub trait FileSystem {
     /// Read the contents of the file at the given offset.
     ///
     /// On success, return the number of bytes read.
-    fn poll_read_block(
+    fn poll_read_block<B: BufMut>(
         &self,
         file: &mut Self::File,
-        block: &mut BlockMut,
+        block: &mut B,
     ) -> Result<Async<usize>, Self::Error>;
 
     /// Write the contents of the file at the given offset.

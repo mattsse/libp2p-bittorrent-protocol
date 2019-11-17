@@ -93,7 +93,7 @@ impl TorrentFile {
     pub fn files_for_block(
         &self,
         metadata: BlockMetadata,
-    ) -> Result<Vec<(&FileEntry, BlockMetadata)>, TorrentError> {
+    ) -> Result<Vec<(&FileEntry, FileWindow)>, TorrentError> {
         if (metadata.piece_index as usize) < self.meta_info.info.pieces.len()
             && (metadata.block_offset + metadata.block_length as u64)
                 <= self.meta_info.info.piece_length
@@ -112,25 +112,21 @@ impl TorrentFile {
                 if block_start >= file.offset {
                     if file.offset + file.size >= block_end {
                         // whole block inside this file
-                        return Ok(vec![(file, metadata)]);
+                        let window_offset = block_start - file.offset;
+                        let window_length = metadata.block_length as u64;
+                        return Ok(vec![(file, FileWindow::new(window_offset, window_length))]);
                     } else {
                         // block overlap in next file
-                        let meta = BlockMetadata::new(
-                            metadata.piece_index,
-                            metadata.block_offset,
-                            (file.offset + file.size - block_start) as usize,
-                        );
-                        files.push((file, meta));
+                        let window_offset = block_start - file.offset;
+                        let window_length = file.offset + file.size - block_start;
+                        files.push((file, FileWindow::new(window_offset, window_offset)));
                     }
                 } else {
                     // block starts before file and ends in range
+
                     if file.size + file.offset <= block_end {
-                        let meta = BlockMetadata::new(
-                            metadata.piece_index,
-                            file.offset,
-                            (block_end - file.offset + file.size) as usize,
-                        );
-                        files.push((file, meta));
+                        let window_length = block_end - file.offset + file.size;
+                        files.push((file, FileWindow::new(0, window_length)));
                     }
                 }
             }
@@ -187,14 +183,18 @@ impl Borrow<TorrentFileId> for FileEntry {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct FileSlice {
-    /// index of the file in the torrentinfo
-    pub file_index: u32,
+#[derive(Debug, Clone, Eq, Copy, PartialEq, Hash)]
+pub struct FileWindow {
     /// byte offset in the file where the range
-    pub offset: u32,
+    pub offset: u64,
     /// number of bytes this range is
-    pub window_size: u32,
+    pub length: u64,
+}
+
+impl FileWindow {
+    pub fn new(offset: u64, length: u64) -> Self {
+        Self { offset, length }
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
