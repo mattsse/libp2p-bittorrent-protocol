@@ -18,7 +18,7 @@ use crate::disk::block::{
     BlockFile,
     BlockFileRead,
     BlockFileWrite,
-    BlockIn,
+    BlockJob,
     BlockMetadata,
     BlockMut,
     BlockRead,
@@ -40,7 +40,7 @@ use std::ops::Deref;
 /// `DiskManager` object which handles the storage of `Blocks` to the
 /// `FileSystem`.
 pub struct DiskManager<TFileSystem: FileSystem> {
-    active_blocks: Vec<BlockIn<TFileSystem::File>>,
+    active_blocks: Vec<BlockJob<TFileSystem::File>>,
     file_cache: LruCache<TorrentFileId, FileState<TFileSystem::File>>,
     torrents: FnvHashSet<TorrentFile>,
     file_system: TFileSystem,
@@ -102,8 +102,6 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
         }
     }
 
-    // TODO dont sort by block offset in case of multiple files,
-    // use a normal vector instead
     fn poll_files(
         &mut self,
         id: TorrentId,
@@ -190,7 +188,7 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
         &mut self,
         id: TorrentId,
         block: Block,
-    ) -> Result<Async<Result<BlockIn<TFileSystem::File>, TorrentError>>, TFileSystem::Error> {
+    ) -> Result<Async<Result<BlockJob<TFileSystem::File>, TorrentError>>, TFileSystem::Error> {
         // validate piece hash
         if !self.is_good_piece(id, &block) {
             error!("Piece hash mismatch {:?}", block.len());
@@ -205,7 +203,7 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                     if files.len() == 1 {
                         let (window, file) = files.into_iter().next().unwrap();
 
-                        Ok(Async::Ready(Ok(BlockIn::Write(BlockWrite::Single {
+                        Ok(Async::Ready(Ok(BlockJob::Write(BlockWrite::Single {
                             metadata: block.metadata(),
                             block: BlockFileWrite::new(file, block.into_bytes(), window),
                         }))))
@@ -213,14 +211,16 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                         let mut blocks = Vec::with_capacity(files.len());
                         let metadata = block.metadata();
 
+                        let mut fragemt_offset = 0;
+
                         for (window, file) in files {
                             // adjust blocks
                             let fragment =
-                                Bytes::from(&block[window.offset as usize..window.length as usize]);
-
+                                Bytes::from(&block[fragemt_offset..window.length as usize]);
+                            fragemt_offset + window.length as usize;
                             blocks.push(BlockFileWrite::new(file, fragment, window));
                         }
-                        let block = BlockIn::Write(BlockWrite::Overlap {
+                        let block = BlockJob::Write(BlockWrite::Overlap {
                             torrent: id,
                             blocks,
                             metadata,
@@ -244,13 +244,13 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
         &mut self,
         id: TorrentId,
         meta: BlockMetadata,
-    ) -> Result<Async<Result<BlockIn<TFileSystem::File>, TorrentError>>, TFileSystem::Error> {
+    ) -> Result<Async<Result<BlockJob<TFileSystem::File>, TorrentError>>, TFileSystem::Error> {
         if let Async::Ready(res) = self.poll_files(id, meta.clone())? {
             match res {
                 Ok(files) => {
                     if files.len() == 1 {
                         let (window, file) = files.into_iter().next().unwrap();
-                        Ok(Async::Ready(Ok(BlockIn::Read(BlockRead::Single {
+                        Ok(Async::Ready(Ok(BlockJob::Read(BlockRead::Single {
                             metadata: meta,
                             block: BlockFileRead::new(file, window),
                         }))))
@@ -260,7 +260,7 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                         for (window, file) in files {
                             blocks.push(BlockFileRead::new(file, window));
                         }
-                        let block = BlockIn::Read(BlockRead::Overlap {
+                        let block = BlockJob::Read(BlockRead::Overlap {
                             torrent: id,
                             blocks,
                             metadata: meta,
@@ -277,7 +277,7 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
         }
     }
 
-    fn finalize_block(&mut self, block: BlockIn<TFileSystem::File>) -> DiskMessageOut {
+    fn finalize_block(&mut self, block: BlockJob<TFileSystem::File>) -> DiskMessageOut {
         match block.finalize() {
             BlockResult::Read {
                 torrent,

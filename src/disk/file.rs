@@ -66,15 +66,12 @@ impl TorrentFile {
     }
 
     pub fn is_good_piece(&self, block: &Block) -> bool {
-        error!("piece index: {}", block.metadata().piece_index);
         if let Some(piece_hash) = self
             .meta_info
             .info
             .pieces
             .get(block.metadata().piece_index as usize)
         {
-            error!("torrent piece hash: {:?}", piece_hash);
-            error!("piece hash: {:?}", ShaHash::from_bytes(block));
             ShaHash::from_bytes(block) == *piece_hash
         } else {
             false

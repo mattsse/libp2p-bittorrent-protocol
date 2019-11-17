@@ -375,18 +375,18 @@ impl<TFile> BlockFileRead<TFile> {
 }
 
 #[derive(Debug)]
-pub enum BlockIn<TFile> {
+pub enum BlockJob<TFile> {
     Read(BlockRead<TFile>),
     Write(BlockWrite<TFile>),
 }
 
-impl<TFile> BlockIn<TFile> {
+impl<TFile> BlockJob<TFile> {
     pub fn poll<TFileSystem: FileSystem<File = TFile>>(
         &mut self,
         fs: &mut TFileSystem,
     ) -> Result<Async<()>, TFileSystem::Error> {
         match self {
-            BlockIn::Read(read) => match read {
+            BlockJob::Read(read) => match read {
                 BlockRead::Single { metadata, block } => block.poll(fs),
                 BlockRead::Overlap { blocks, .. } => {
                     let mut ready = true;
@@ -403,7 +403,7 @@ impl<TFile> BlockIn<TFile> {
                 }
             },
 
-            BlockIn::Write(write) => match write {
+            BlockJob::Write(write) => match write {
                 BlockWrite::Single { metadata, block } => block.poll(fs),
                 BlockWrite::Overlap { blocks, .. } => {
                     let mut ready = true;
@@ -424,22 +424,22 @@ impl<TFile> BlockIn<TFile> {
 
     pub fn finalize(self) -> BlockResult<TFile> {
         match self {
-            BlockIn::Read(read) => read.finalize(),
-            BlockIn::Write(write) => write.finalize(),
+            BlockJob::Read(read) => read.finalize(),
+            BlockJob::Write(write) => write.finalize(),
         }
     }
 
     pub fn is_read(&self) -> bool {
         match self {
-            BlockIn::Read(_) => true,
-            BlockIn::Write(_) => false,
+            BlockJob::Read(_) => true,
+            BlockJob::Write(_) => false,
         }
     }
 
     pub fn is_write(&self) -> bool {
         match self {
-            BlockIn::Read(_) => false,
-            BlockIn::Write(_) => true,
+            BlockJob::Read(_) => false,
+            BlockJob::Write(_) => true,
         }
     }
 }
