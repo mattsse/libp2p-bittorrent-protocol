@@ -1,5 +1,5 @@
 [package]
-name = "libp2p-bittorrent-protocol"
+name = "libp2p-bittorrent"
 version = "0.1.0"
 edition = "2018"
 authors = ["matthiasseitz <matthias.seitz@tum.de>"]

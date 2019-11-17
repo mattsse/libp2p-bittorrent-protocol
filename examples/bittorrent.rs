@@ -31,10 +31,10 @@ use libp2p::{build_development_transport, identity, PeerId, Swarm};
 use rand;
 use tempfile::tempdir;
 
-use libp2p_bittorrent_protocol::behavior::InterestOk;
-use libp2p_bittorrent_protocol::disk::NativeFileSystem;
-use libp2p_bittorrent_protocol::peer::TorrentState;
-use libp2p_bittorrent_protocol::{
+use libp2p_bittorrent::behavior::InterestOk;
+use libp2p_bittorrent::disk::NativeFileSystem;
+use libp2p_bittorrent::peer::TorrentState;
+use libp2p_bittorrent::{
     BitTorrent,
     BitTorrentConfig,
     BitTorrentEvent,
