@@ -26,12 +26,16 @@ use crate::disk::block::{
     BlockWrite,
 };
 use crate::disk::error::TorrentError;
+use crate::disk::error::TorrentError::TorrentNotFound;
 use crate::disk::file::{FileEntry, TorrentFile, TorrentFileId};
 use crate::disk::fs::FileSystem;
 use crate::disk::message::{DiskMessageIn, DiskMessageOut};
 use crate::disk::native::NativeFileSystem;
 use crate::peer::torrent::TorrentId;
+use crate::piece::PieceState;
 use crate::torrent::MetaInfo;
+use bytes::Bytes;
+use std::ops::Deref;
 
 /// `DiskManager` object which handles the storage of `Blocks` to the
 /// `FileSystem`.
@@ -102,7 +106,10 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
         &mut self,
         id: TorrentId,
         meta: BlockMetadata,
-    ) -> Result<Async<BTreeMap<u64, BlockFile<TFileSystem::File>>>, TFileSystem::Error> {
+    ) -> Result<
+        Async<Result<BTreeMap<u64, (BlockMetadata, BlockFile<TFileSystem::File>)>, TorrentError>>,
+        TFileSystem::Error,
+    > {
         if let Some(torrent) = self.torrents.get(&id) {
             match torrent.files_for_block(meta.clone()) {
                 Ok(files) => {
@@ -144,30 +151,95 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                         // multiple files for a block needed
                         let mut blocks = BTreeMap::new();
 
-                        for (id, fs, meta) in queued_files {
-                            blocks.insert(meta.block_offset, BlockFile::new(id, fs));
+                        for (id, file, meta) in queued_files {
+                            blocks.insert(meta.block_offset, (meta, BlockFile::new(id, file)));
 
                             self.file_cache
                                 .insert(id, FileState::Busy(meta.piece_index));
                         }
 
-                        Ok(Async::Ready(blocks))
+                        Ok(Async::Ready(Ok(blocks)))
                     } else {
                         // add removed states back, but queued
-                        for (id, fs, meta) in queued_files {
-                            self.file_cache.insert(id, FileState::Queued(fs, meta));
+                        for (id, file, meta) in queued_files {
+                            self.file_cache.insert(id, FileState::Queued(file, meta));
                         }
                         Ok(Async::NotReady)
                     }
                 }
-                Err(e) => panic!(),
+                Err(e) => {
+                    debug!("No torrent files for block available.");
+                    Ok(Async::Ready(Err(e)))
+                }
             }
         } else {
-            panic!()
-            //            Ok(Async::Ready(DiskMessageOut::TorrentError(
-            //                id,
-            //                TorrentError::TorrentNotFound { id },
-            //            )))
+            Ok(Async::Ready(Err(TorrentError::TorrentNotFound { id })))
+        }
+    }
+
+    fn is_good_piece(&self, id: TorrentId, block: &Block) -> bool {
+        if let Some(torrent) = self.torrents.get(&id) {
+            torrent.is_good_piece(block)
+        } else {
+            false
+        }
+    }
+
+    fn poll_create_block_write(
+        &mut self,
+        id: TorrentId,
+        block: Block,
+    ) -> Result<Async<Result<BlockIn<TFileSystem::File>, TorrentError>>, TFileSystem::Error> {
+        // validate piece hash
+        if !self.is_good_piece(id, &block) {
+            debug!("Piece hash mismatch {:?}", block.len());
+            return Ok(Async::Ready(Err(TorrentError::BadPiece {
+                index: block.metadata().piece_index,
+            })));
+        }
+
+        if let Async::Ready(res) = self.poll_files(id, block.metadata())? {
+            match res {
+                Ok(files) => {
+                    if files.len() == 1 {
+                        let (_, (_, file)) = files.into_iter().next().unwrap();
+
+                        Ok(Async::Ready(Ok(BlockIn::Write(BlockWrite::Single(
+                            BlockFileWrite::new(file, block),
+                        )))))
+                    } else {
+                        let mut blocks = BTreeMap::new();
+                        let metadata = block.metadata();
+
+                        for (offset, (fragment_metadata, file)) in files {
+                            // adjust blocks
+                            let fragment = Block::new(
+                                fragment_metadata,
+                                Bytes::from(
+                                    &block[fragment_metadata.block_offset as usize
+                                        ..fragment_metadata.block_length],
+                                ),
+                            );
+
+                            blocks.insert(offset, BlockFileWrite::new(file, fragment));
+                        }
+                        let block = BlockIn::Write(BlockWrite::Overlap {
+                            torrent: id,
+                            blocks,
+                            metadata,
+                        });
+                        Ok(Async::Ready(Ok(block)))
+                    }
+                }
+                Err(err) => {
+                    debug!("No files found to write piece to {:?}", err);
+                    Ok(Async::Ready(Err(err)))
+                }
+            }
+        } else {
+            self.queued_events
+                .push_back(DiskMessageIn::WriteBlock(id, block));
+            Ok(Async::NotReady)
         }
     }
 
@@ -175,28 +247,34 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
         &mut self,
         id: TorrentId,
         meta: BlockMetadata,
-    ) -> Result<Async<BlockIn<TFileSystem::File>>, TFileSystem::Error> {
-        if let Async::Ready(mut files) = self.poll_files(id, meta.clone())? {
-            if files.len() == 1 {
-                let (_, file) = files.into_iter().next().unwrap();
+    ) -> Result<Async<Result<BlockIn<TFileSystem::File>, TorrentError>>, TFileSystem::Error> {
+        if let Async::Ready(res) = self.poll_files(id, meta.clone())? {
+            match res {
+                Ok(files) => {
+                    if files.len() == 1 {
+                        let (_, (meta, file)) = files.into_iter().next().unwrap();
+                        Ok(Async::Ready(Ok(BlockIn::Read(BlockRead::Single(
+                            BlockFileRead::new(file, meta),
+                        )))))
+                    } else {
+                        let mut blocks = BTreeMap::new();
 
-                Ok(Async::Ready(BlockIn::Read(BlockRead::Single(
-                    BlockFileRead::new(file, meta),
-                ))))
-            } else {
-                let mut blocks = BTreeMap::new();
-
-                for (offset, file) in files {
-                    blocks.insert(offset, BlockFileRead::new(file, meta));
+                        for (offset, (meta, file)) in files {
+                            blocks.insert(offset, BlockFileRead::new(file, meta));
+                        }
+                        let block = BlockIn::Read(BlockRead::Overlap {
+                            torrent: id,
+                            blocks,
+                            metadata: meta,
+                        });
+                        Ok(Async::Ready(Ok(block)))
+                    }
                 }
-                let block = BlockIn::Read(BlockRead::Overlap {
-                    torrent: id,
-                    blocks,
-                    metadata: meta,
-                });
-                Ok(Async::Ready(block))
+                Err(err) => Ok(Async::Ready(Err(err))),
             }
         } else {
+            self.queued_events
+                .push_back(DiskMessageIn::ReadBlock(id, meta));
             Ok(Async::NotReady)
         }
     }
@@ -213,11 +291,11 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                         .insert(file.id, FileState::Ready(file.inner));
                 }
                 match result {
-                    Ok(block) => {
-                        // TODO validate against piece hash
-                        DiskMessageOut::BlockRead(torrent, block)
+                    Ok(block) => DiskMessageOut::BlockRead(torrent, block),
+                    Err(meta) => {
+                        debug!("Failed to finalize read block {:?}", meta);
+                        DiskMessageOut::ReadBlockError(torrent, TorrentError::BadBlock { meta })
                     }
-                    Err(metadata) => DiskMessageOut::ReadBlockError(torrent, metadata),
                 }
             }
             BlockResult::Write {
@@ -231,7 +309,12 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                 }
                 match result {
                     Ok(block) => DiskMessageOut::BlockWritten(torrent, block),
-                    Err(metadata) => DiskMessageOut::WriteBlockError(torrent, metadata),
+                    Err(metadata) => DiskMessageOut::WriteBlockError(
+                        torrent,
+                        TorrentError::BadPiece {
+                            index: metadata.piece_index,
+                        },
+                    ),
                 }
             }
         }
@@ -245,8 +328,8 @@ impl<TFileSystem: FileSystem> Future for DiskManager<TFileSystem> {
     fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
         // remove each `block`s one by one, update file state or add them back
         loop {
-            for b in (0..self.active_blocks.len()).rev() {
-                let mut block = self.active_blocks.swap_remove(b);
+            for block in (0..self.active_blocks.len()).rev() {
+                let mut block = self.active_blocks.swap_remove(block);
                 if block.poll(&mut self.file_system)?.is_ready() {
                     return Ok(Async::Ready(self.finalize_block(block)));
                 } else {
@@ -274,19 +357,39 @@ impl<TFileSystem: FileSystem> Future for DiskManager<TFileSystem> {
                         }
                         DiskMessageIn::SyncTorrent(id) => {}
                         DiskMessageIn::ReadBlock(id, metadata) => {
-                            if let Async::Ready(block) =
+                            debug!("read block received {:?} {:?}", id, metadata);
+                            if let Async::Ready(res) =
                                 self.poll_create_block_read(id, metadata.clone())?
                             {
-                                self.active_blocks.push(block);
-                                continue;
+                                match res {
+                                    Ok(block) => self.active_blocks.push(block),
+                                    Err(err) => {
+                                        return Ok(Async::Ready(DiskMessageOut::ReadBlockError(
+                                            id, err,
+                                        )));
+                                    }
+                                }
                             } else {
-                                self.queued_events
-                                    .push_back(DiskMessageIn::ReadBlock(id, metadata));
                                 return Ok(Async::NotReady);
                             }
                         }
                         DiskMessageIn::WriteBlock(id, block) => {
                             debug!("Write block received {:?} {:?}", id, block.metadata());
+                            if let Async::Ready(res) = self.poll_create_block_write(id, block)? {
+                                match res {
+                                    Ok(block) => {
+                                        self.active_blocks.push(block);
+                                    }
+                                    Err(err) => {
+                                        debug!("Found bad piece to write {:?}", err);
+                                        return Ok(Async::Ready(DiskMessageOut::WriteBlockError(
+                                            id, err,
+                                        )));
+                                    }
+                                }
+                            } else {
+                                return Ok(Async::NotReady);
+                            }
                         }
                     }
                 } else {

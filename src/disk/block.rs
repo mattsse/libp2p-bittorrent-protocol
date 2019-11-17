@@ -221,15 +221,17 @@ impl<TFile> BlockFile<TFile> {
 #[derive(Debug)]
 pub struct BlockFileWrite<TFile> {
     file: BlockFile<TFile>,
+    written: usize,
     block: Block,
     state: BlockState,
 }
 
 impl<TFile> BlockFileWrite<TFile> {
-    pub fn new(file_id: TorrentFileId, file: TFile, block: Block) -> Self {
+    pub fn new(file: BlockFile<TFile>, block: Block) -> Self {
         Self {
-            file: BlockFile::new(file_id, file),
+            file,
             block,
+            written: 0,
             state: Default::default(),
         }
     }
@@ -249,11 +251,17 @@ impl<TFile> BlockFileWrite<TFile> {
                     &mut self.file.inner,
                     SeekFrom::Start(self.block.metadata().block_offset),
                 )? {
-                    if let Async::Ready(_) =
-                        fs.poll_write_block(&mut self.file.inner, &mut self.block)?
-                    {
-                        self.state = BlockState::Ready;
-                        Ok(Async::Ready(()))
+                    if let Async::Ready(written) = fs.poll_write_block(
+                        &mut self.file.inner,
+                        &self.block[self.written..self.block.metadata.block_length],
+                    )? {
+                        self.written += written;
+                        if self.written < self.metadata().block_length {
+                            Ok(Async::NotReady)
+                        } else {
+                            self.state = BlockState::Ready;
+                            Ok(Async::Ready(()))
+                        }
                     } else {
                         self.state = BlockState::Process;
                         Ok(Async::NotReady)
@@ -263,11 +271,17 @@ impl<TFile> BlockFileWrite<TFile> {
                 }
             }
             BlockState::Process => {
-                if let Async::Ready(_) =
-                    fs.poll_write_block(&mut self.file.inner, &mut self.block)?
-                {
-                    self.state = BlockState::Ready;
-                    Ok(Async::Ready(()))
+                if let Async::Ready(written) = fs.poll_write_block(
+                    &mut self.file.inner,
+                    &self.block[self.written..self.block.metadata.block_length],
+                )? {
+                    self.written += written;
+                    if self.written < self.metadata().block_length {
+                        Ok(Async::NotReady)
+                    } else {
+                        self.state = BlockState::Ready;
+                        Ok(Async::Ready(()))
+                    }
                 } else {
                     Ok(Async::NotReady)
                 }
@@ -293,6 +307,7 @@ impl Default for BlockState {
 pub struct BlockFileRead<TFile> {
     file: BlockFile<TFile>,
     block: BlockMut,
+    read: usize,
     state: BlockState,
 }
 
@@ -301,6 +316,7 @@ impl<TFile> BlockFileRead<TFile> {
         Self {
             file,
             block: BlockMut::empty_for_metadata(metadata),
+            read: 0,
             state: Default::default(),
         }
     }
@@ -316,15 +332,21 @@ impl<TFile> BlockFileRead<TFile> {
         match self.state {
             BlockState::Ready => Ok(Async::Ready(())),
             BlockState::Seek => {
-                if let Async::Ready(_) = fs.poll_seek(
+                // TODO adjust offset
+                if let Async::Ready(pos) = fs.poll_seek(
                     &mut self.file.inner,
                     SeekFrom::Start(self.block.metadata().block_offset),
                 )? {
-                    if let Async::Ready(_) =
+                    if let Async::Ready(read) =
                         fs.poll_read_block(&mut self.file.inner, &mut self.block)?
                     {
-                        self.state = BlockState::Ready;
-                        Ok(Async::Ready(()))
+                        self.read += read;
+                        if self.read < self.metadata().block_length {
+                            Ok(Async::NotReady)
+                        } else {
+                            self.state = BlockState::Ready;
+                            Ok(Async::Ready(()))
+                        }
                     } else {
                         self.state = BlockState::Process;
                         Ok(Async::NotReady)
@@ -334,11 +356,16 @@ impl<TFile> BlockFileRead<TFile> {
                 }
             }
             BlockState::Process => {
-                if let Async::Ready(_) =
+                if let Async::Ready(read) =
                     fs.poll_read_block(&mut self.file.inner, &mut self.block)?
                 {
-                    self.state = BlockState::Ready;
-                    Ok(Async::Ready(()))
+                    self.read += read;
+                    if self.read < self.metadata().block_length {
+                        Ok(Async::NotReady)
+                    } else {
+                        self.state = BlockState::Ready;
+                        Ok(Async::Ready(()))
+                    }
                 } else {
                     Ok(Async::NotReady)
                 }
@@ -401,6 +428,20 @@ impl<TFile> BlockIn<TFile> {
             BlockIn::Write(write) => write.finalize(),
         }
     }
+
+    pub fn is_read(&self) -> bool {
+        match self {
+            BlockIn::Read(_) => true,
+            BlockIn::Write(_) => false,
+        }
+    }
+
+    pub fn is_write(&self) -> bool {
+        match self {
+            BlockIn::Read(_) => false,
+            BlockIn::Write(_) => true,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -420,6 +461,11 @@ impl<TFile> BlockRead<TFile> {
                 let result = if block.block.is_valid_len() {
                     Ok(block.block)
                 } else {
+                    debug!(
+                        "Invalid block length, got {:?}, expected {:?}",
+                        block.block.block_data.len(),
+                        block.block.metadata
+                    );
                     Err(block.block.metadata)
                 };
 

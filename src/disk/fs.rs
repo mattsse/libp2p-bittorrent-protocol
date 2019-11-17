@@ -51,7 +51,7 @@ pub trait FileSystem {
     fn poll_write_block(
         &self,
         file: &mut Self::File,
-        block: &Block,
+        buf: &[u8],
     ) -> Result<Async<usize>, Self::Error>;
 
     /// Write the contents of the file at the given offset.

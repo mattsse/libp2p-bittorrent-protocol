@@ -51,7 +51,7 @@ pub enum DiskMessageOut {
     /// Error occurring from a `AddTorrent` or `RemoveTorrent` message.
     TorrentError(TorrentId, TorrentError),
     /// Error occurring from a `ReadBlock` message.
-    ReadBlockError(TorrentId, BlockMetadata),
+    ReadBlockError(TorrentId, TorrentError),
     /// Error occurring from a `WriteBlock` message.
-    WriteBlockError(TorrentId, BlockMetadata),
+    WriteBlockError(TorrentId, TorrentError),
 }

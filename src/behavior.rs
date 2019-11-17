@@ -590,6 +590,7 @@ where
                 }
             }
             BittorrentHandlerEvent::Interest { inner } => {
+                debug!("Received interest {:?} from remote {:?}", inner, peer_id);
                 let interest = self.torrents.on_interest_by_remote(peer_id, inner);
                 // TODO optimistic unchoking if remote is interested
                 self.queued_events
@@ -663,6 +664,7 @@ where
                             Ok((torrent_id, piece)) =>
                             // write complete piece to disk
                             {
+                                debug!("Piece ready to write {:?}", piece.metadata());
                                 self.disk_manager.write_block(torrent_id, piece)
                             }
                             Err(e) => {
@@ -679,6 +681,7 @@ where
                         });
                     }
                     TorrentPoolState::Waiting(torrent) => {
+                        debug!("Torrent {:?} waiting...", torrent.id());
                         break;
                     }
                     TorrentPoolState::Finished(torrent_id) => {
@@ -698,75 +701,86 @@ where
                         });
                     }
                 }
+            }
 
-                loop {
-                    // drain pending disk io
-                    match self.disk_manager.poll() {
-                        Ok(Async::Ready(event)) => {
-                            match event {
-                                DiskMessageOut::TorrentAdded(_) => {}
-                                DiskMessageOut::TorrentRemoved(_, _) => {}
-                                DiskMessageOut::TorrentSynced(id) => {
+            loop {
+                // drain pending disk io
+                match self.disk_manager.poll() {
+                    Ok(Async::Ready(event)) => {
+                        match event {
+                            DiskMessageOut::TorrentAdded(_) => {}
+                            DiskMessageOut::TorrentRemoved(_, _) => {}
+                            DiskMessageOut::TorrentSynced(id) => {
+                                self.queued_events.push_back(
+                                    NetworkBehaviourAction::GenerateEvent(
+                                        BittorrentEvent::DiskResult(Ok(
+                                            DiskMessageOut::TorrentSynced(id),
+                                        )),
+                                    ),
+                                );
+                            }
+                            DiskMessageOut::BlockRead(torrent, block) => {
+                                debug!("disk manager read: {:?}", block.metadata());
+
+                                if let Some((peer_id, request_id)) =
+                                    self.torrents.on_block_read(torrent, &block.metadata())
+                                {
                                     self.queued_events.push_back(
-                                        NetworkBehaviourAction::GenerateEvent(
-                                            BittorrentEvent::DiskResult(Ok(
-                                                DiskMessageOut::TorrentSynced(id),
-                                            )),
-                                        ),
+                                        NetworkBehaviourAction::SendEvent {
+                                            peer_id,
+                                            event: BittorrentHandlerIn::GetPieceRes {
+                                                piece: block.into_piece(),
+                                                request_id,
+                                            },
+                                        },
+                                    );
+                                } else {
+                                    // TODO error handling
+                                    debug!(
+                                        "Failed to match read block to peer {:?}",
+                                        block.metadata()
                                     );
                                 }
-                                DiskMessageOut::BlockRead(torrent, block) => {
-                                    debug!("disk managaer read: {:?}", block.metadata());
-
-                                    if let Some((peer_id, request_id)) =
-                                        self.torrents.on_block_read(torrent, &block.metadata())
-                                    {
+                            }
+                            DiskMessageOut::BlockWritten(torrent_id, block) => {
+                                if let Some(torrent) = self.torrents.get(&torrent_id) {
+                                    let index = block.metadata().piece_index as u32;
+                                    for peer in torrent.iter_peer_ids() {
                                         self.queued_events.push_back(
                                             NetworkBehaviourAction::SendEvent {
-                                                peer_id,
-                                                event: BittorrentHandlerIn::GetPieceRes {
-                                                    piece: block.into_piece(),
-                                                    request_id,
-                                                },
+                                                peer_id: peer.clone(),
+                                                event: BittorrentHandlerIn::Have { index },
                                             },
                                         );
-                                    } else {
-                                        // TODO error
                                     }
-                                }
-                                DiskMessageOut::BlockWritten(torrent_id, block) => {
-                                    if let Some(torrent) = self.torrents.get(&torrent_id) {
-                                        let index = block.metadata().piece_index as u32;
-                                        for peer in torrent.iter_peer_ids() {
-                                            self.queued_events.push_back(
-                                                NetworkBehaviourAction::SendEvent {
-                                                    peer_id: peer.clone(),
-                                                    event: BittorrentHandlerIn::Have { index },
-                                                },
-                                            );
-                                        }
-                                    }
-                                }
-                                DiskMessageOut::TorrentError(_, _) => {}
-                                DiskMessageOut::ReadBlockError(id, err) => {
-                                    debug!("encountered error while reading block {:?}", err);
-                                }
-                                DiskMessageOut::WriteBlockError(id, err) => {
-                                    debug!("encountered error while writing block {:?}", err);
-                                    // TODO err handling
                                 }
                             }
+                            DiskMessageOut::TorrentError(_, _) => {}
+                            DiskMessageOut::ReadBlockError(id, err) => {
+                                debug!("encountered error while reading block {:?}", err);
+                                return Async::Ready(NetworkBehaviourAction::GenerateEvent(
+                                    BittorrentEvent::DiskResult(Ok(
+                                        DiskMessageOut::ReadBlockError(id, err),
+                                    )),
+                                ));
+                            }
+                            DiskMessageOut::WriteBlockError(id, err) => {
+                                debug!("encountered error while writing block {:?}", err);
+                                // TODO err handling
+                            }
                         }
-                        Err(err) => {
-                            return Async::Ready(NetworkBehaviourAction::GenerateEvent(
-                                BittorrentEvent::DiskResult(Err(())),
-                            ));
-                        }
-                        _ => {
-                            break;
-                        }
-                    };
-                }
+                    }
+                    Err(err) => {
+                        debug!("diskmanager error");
+                        return Async::Ready(NetworkBehaviourAction::GenerateEvent(
+                            BittorrentEvent::DiskResult(Err(())),
+                        ));
+                    }
+                    Ok(Async::NotReady) => {
+                        debug!("Diskmanager not ready.");
+                        break;
+                    }
+                };
             }
 
             // No immediate event was produced as a result of a finished bittorrent event.

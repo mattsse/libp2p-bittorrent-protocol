@@ -83,15 +83,15 @@ impl FileSystem for NativeFileSystem {
         file: &mut Self::File,
         block: &mut BlockMut,
     ) -> Result<Async<usize>, Self::Error> {
-        file.poll_read(block.bytes_mut())
+        file.read_buf(block.bytes_mut())
     }
 
     fn poll_write_block(
         &self,
         file: &mut Self::File,
-        block: &Block,
+        buf: &[u8],
     ) -> Result<Async<usize>, Self::Error> {
-        file.poll_write(block)
+        file.poll_write(buf)
     }
 
     fn write_file(
