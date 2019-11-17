@@ -11,7 +11,7 @@ use crate::behavior::BlockErr;
 use crate::bitfield::BitField;
 use crate::disk::block::{Block, BlockMetadata, BlockMut};
 use crate::disk::error::TorrentError;
-use crate::handler::BittorrentRequestId;
+use crate::handler::BitTorrentRequestId;
 use crate::peer::torrent::TorrentId;
 use crate::peer::{BttPeer, ChokeType, InterestType};
 use crate::piece::PieceSelection;
@@ -38,7 +38,7 @@ pub struct TorrentPieceHandler {
     /// Tracks the state of the currently downloaded piece
     piece_buffer: Option<PieceBuffer>,
     /// Pending read requests
-    pending_seed_blocks: Vec<(PeerId, BittorrentRequestId, BlockMetadata)>,
+    pending_seed_blocks: Vec<(PeerId, BitTorrentRequestId, BlockMetadata)>,
     /// Which pieces the client owns and lacks
     bitfield: BitField,
     /// length for a piece in the torrent
@@ -167,7 +167,7 @@ impl TorrentPieceHandler {
         &mut self,
         peer_id: PeerId,
         block: BlockMetadata,
-        request_id: BittorrentRequestId,
+        request_id: BitTorrentRequestId,
     ) {
         self.pending_seed_blocks.push((peer_id, request_id, block));
     }
@@ -188,7 +188,7 @@ impl TorrentPieceHandler {
 
     pub fn remove_pending_seed_by_request(
         &mut self,
-        req_id: &BittorrentRequestId,
+        req_id: &BitTorrentRequestId,
     ) -> Option<(PeerId, BlockMetadata)> {
         let pos = self
             .pending_seed_blocks
@@ -208,7 +208,7 @@ impl TorrentPieceHandler {
     pub fn remove_pending_seed(
         &mut self,
         block: &BlockMetadata,
-    ) -> Option<(PeerId, BittorrentRequestId)> {
+    ) -> Option<(PeerId, BitTorrentRequestId)> {
         let pos = self
             .pending_seed_blocks
             .iter()

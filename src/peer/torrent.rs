@@ -11,7 +11,7 @@ use wasm_timer::Instant;
 use crate::util::ShaHash;
 
 use crate::behavior::{
-    BittorrentConfig,
+    BitTorrentConfig,
     BlockErr,
     HandshakeError,
     HandshakeOk,
@@ -27,7 +27,7 @@ use crate::bitfield::BitField;
 use crate::disk::block::{Block, BlockMetadata, BlockMut};
 use crate::disk::error::TorrentError;
 use crate::disk::message::DiskMessageIn;
-use crate::handler::BittorrentRequestId;
+use crate::handler::BitTorrentRequestId;
 use crate::peer::piece::{NextBlock, TorrentPieceHandler, TorrentPieceHandlerState};
 use crate::peer::{BttPeer, ChokeType, InterestType};
 use crate::piece::{Piece, PieceSelection};
@@ -76,14 +76,14 @@ pub enum TorrentPoolState<'a, TInner> {
 
 impl<TInner> TorrentPool<TInner> {
     /// Create a new pool for the `config`.
-    pub fn new(local_peer_id: PeerId, config: BittorrentConfig) -> Self {
+    pub fn new(local_peer_id: PeerId, config: BitTorrentConfig) -> Self {
         let local_peer_hash = config.peer_hash.unwrap_or_else(|| ShaHash::random());
         let max_simultaneous_downloads = config
             .max_simultaneous_downloads
-            .unwrap_or(BittorrentConfig::MAX_ACTIVE_TORRENTS);
+            .unwrap_or(BitTorrentConfig::MAX_ACTIVE_TORRENTS);
         let max_active_torrents = config
             .max_active_torrents
-            .unwrap_or(BittorrentConfig::MAX_ACTIVE_TORRENTS);
+            .unwrap_or(BitTorrentConfig::MAX_ACTIVE_TORRENTS);
         Self {
             local_peer_hash,
             local_peer_id,
@@ -307,7 +307,7 @@ impl<TInner> TorrentPool<TInner> {
         Err(HandshakeError::InfoHashMismatch(peer_id, None))
     }
 
-    ///  Event handling for a [`BittorrentHandlerEvent::HandshakeRes`] sent by
+    ///  Event handling for a [`BitTorrentHandlerEvent::HandshakeRes`] sent by
     /// the remote.
     ///
     /// If we still the torrent identified with the `torrent_id`, we begin to
@@ -384,7 +384,7 @@ impl<TInner> TorrentPool<TInner> {
         Err(PeerError::NotFound(peer_id))
     }
 
-    /// Event handling for a [`BittorrentHandlerEvent::GetPieceReq`].
+    /// Event handling for a [`BitTorrentHandlerEvent::GetPieceReq`].
     ///
     /// Remote want's to leech a block.
     /// We check if the remote is currently tracked and the remote is interested
@@ -394,8 +394,8 @@ impl<TInner> TorrentPool<TInner> {
         &mut self,
         peer_id: PeerId,
         metadata: BlockMetadata,
-        request_id: BittorrentRequestId,
-    ) -> Result<(TorrentId, BlockMetadata), (PeerId, BlockMetadata, BittorrentRequestId)> {
+        request_id: BitTorrentRequestId,
+    ) -> Result<(TorrentId, BlockMetadata), (PeerId, BlockMetadata, BitTorrentRequestId)> {
         for torrent in self.torrents.values_mut() {
             if torrent.can_seed_piece_to(&peer_id, metadata.piece_index as usize) {
                 torrent
@@ -407,7 +407,7 @@ impl<TInner> TorrentPool<TInner> {
         Err((peer_id, metadata, request_id))
     }
 
-    /// Event handling for a [`BittorrentHandlerEvent::GetPieceRes`].
+    /// Event handling for a [`BitTorrentHandlerEvent::GetPieceRes`].
     pub fn on_block_response(
         &mut self,
         torrent_id: TorrentId,
@@ -425,7 +425,7 @@ impl<TInner> TorrentPool<TInner> {
 
     pub fn on_cancel_request(
         &mut self,
-        id: BittorrentRequestId,
+        id: BitTorrentRequestId,
     ) -> Option<(PeerId, BlockMetadata)> {
         for torrent in self.torrents.values_mut() {
             if let Some((peer, block)) = torrent.piece_handler.remove_pending_seed_by_request(&id) {
@@ -439,7 +439,7 @@ impl<TInner> TorrentPool<TInner> {
         &mut self,
         torrent_id: TorrentId,
         block: &BlockMetadata,
-    ) -> Option<(PeerId, BittorrentRequestId)> {
+    ) -> Option<(PeerId, BitTorrentRequestId)> {
         if let Some(torrent) = self.torrents.get_mut(&torrent_id) {
             if let Some((peer, id)) = torrent.piece_handler.remove_pending_seed(block) {
                 return Some((peer, id));
@@ -448,7 +448,7 @@ impl<TInner> TorrentPool<TInner> {
         None
     }
 
-    /// Event handling for a [`BittorrentHandlerEvent::Have`].
+    /// Event handling for a [`BitTorrentHandlerEvent::Have`].
     ///
     /// Update the peer's bitfield.
     /// If the peer was not found a `None` value is returned, otherwise if the

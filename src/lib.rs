@@ -3,7 +3,7 @@
 #[macro_use]
 extern crate log;
 
-pub use behavior::{Bittorrent, BittorrentConfig, BittorrentEvent};
+pub use behavior::{BitTorrent, BitTorrentConfig, BitTorrentEvent};
 pub use behavior::{
     ChokeResult,
     DiskResult,

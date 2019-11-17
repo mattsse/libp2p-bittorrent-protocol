@@ -1,4 +1,4 @@
-//! Implementation of the `Bittorrent` network behaviour.
+//! Implementation of the `BitTorrent` network behaviour.
 
 use std::borrow::Cow;
 use std::collections::{HashSet, VecDeque};
@@ -28,9 +28,9 @@ use crate::{
     disk::fs::FileSystem,
     disk::manager::DiskManager,
     disk::torrent::TorrentSeed,
-    handler::BittorrentHandler,
-    handler::BittorrentHandlerEvent,
-    handler::BittorrentHandlerIn,
+    handler::BitTorrentHandler,
+    handler::BitTorrentHandlerEvent,
+    handler::BitTorrentHandlerIn,
     peer::torrent::{Torrent, TorrentId, TorrentPeer, TorrentPool, TorrentPoolState},
     piece::PieceSelection,
     torrent::MetaInfo,
@@ -39,8 +39,8 @@ use std::ptr::hash;
 
 // TODO add dht support
 
-/// Network behaviour that handles Bittorrent.
-pub struct Bittorrent<TSubstream, TFileSystem>
+/// Network behaviour that handles BitTorrent.
+pub struct BitTorrent<TSubstream, TFileSystem>
 where
     TFileSystem: FileSystem,
 {
@@ -52,7 +52,7 @@ where
     connected_peers: FnvHashSet<PeerId>,
     /// Queued events to return when the behaviour is being polled.
     queued_events:
-        VecDeque<NetworkBehaviourAction<BittorrentHandlerIn<TorrentId>, BittorrentEvent>>,
+        VecDeque<NetworkBehaviourAction<BitTorrentHandlerIn<TorrentId>, BitTorrentEvent>>,
     /// Marker to pin the generics.
     marker: PhantomData<TSubstream>,
     /// Known peers with their torrents
@@ -61,13 +61,13 @@ where
     pending_handshakes: FnvHashMap<PeerId, ShaHash>,
 }
 
-impl<TSubstream, TFileSystem> Bittorrent<TSubstream, TFileSystem>
+impl<TSubstream, TFileSystem> BitTorrent<TSubstream, TFileSystem>
 where
     TFileSystem: FileSystem,
 {
-    /// Creates a new `Bittorrent` network behaviour with the given
+    /// Creates a new `BitTorrent` network behaviour with the given
     /// configuration.
-    pub fn with_config(peer_id: PeerId, filesystem: TFileSystem, config: BittorrentConfig) -> Self {
+    pub fn with_config(peer_id: PeerId, filesystem: TFileSystem, config: BitTorrentConfig) -> Self {
         Self {
             disk_manager: DiskManager::with_capacity(filesystem.into(), 100),
             torrents: TorrentPool::new(peer_id, config),
@@ -127,7 +127,7 @@ where
             self.queued_events
                 .push_back(NetworkBehaviourAction::SendEvent {
                     peer_id,
-                    event: BittorrentHandlerIn::HandshakeReq {
+                    event: BitTorrentHandlerIn::HandshakeReq {
                         handshake: Handshake::new(info_hash, self.torrents.local_peer_hash.clone()),
                         user_data: torrent.id(),
                     },
@@ -135,7 +135,7 @@ where
         } else {
             self.queued_events
                 .push_back(NetworkBehaviourAction::GenerateEvent(
-                    BittorrentEvent::HandshakeResult(Err(HandshakeError::InfoHashNotFound(
+                    BitTorrentEvent::HandshakeResult(Err(HandshakeError::InfoHashNotFound(
                         peer_id, info_hash,
                     ))),
                 ))
@@ -147,14 +147,14 @@ where
             self.queued_events
                 .push_back(NetworkBehaviourAction::SendEvent {
                     peer_id: peer_id.clone(),
-                    event: BittorrentHandlerIn::Choke {
+                    event: BitTorrentHandlerIn::Choke {
                         inner: ChokeType::Choked,
                     },
                 });
         } else {
             self.queued_events
                 .push_back(NetworkBehaviourAction::GenerateEvent(
-                    BittorrentEvent::ChokeResult(Err(PeerError::NotFound(peer_id.clone()))),
+                    BitTorrentEvent::ChokeResult(Err(PeerError::NotFound(peer_id.clone()))),
                 ))
         }
     }
@@ -164,14 +164,14 @@ where
             self.queued_events
                 .push_back(NetworkBehaviourAction::SendEvent {
                     peer_id: peer_id.clone(),
-                    event: BittorrentHandlerIn::Choke {
+                    event: BitTorrentHandlerIn::Choke {
                         inner: ChokeType::UnChoked,
                     },
                 });
         } else {
             self.queued_events
                 .push_back(NetworkBehaviourAction::GenerateEvent(
-                    BittorrentEvent::ChokeResult(Err(PeerError::NotFound(peer_id.clone()))),
+                    BitTorrentEvent::ChokeResult(Err(PeerError::NotFound(peer_id.clone()))),
                 ))
         }
     }
@@ -189,7 +189,7 @@ where
             Ok((id, actual_state)) => {
                 self.queued_events
                     .push_back(NetworkBehaviourAction::GenerateEvent(
-                        BittorrentEvent::TorrentAddedResult(Ok(TorrentAddedOk::NewLeech {
+                        BitTorrentEvent::TorrentAddedResult(Ok(TorrentAddedOk::NewLeech {
                             torrent: id,
                             state: actual_state,
                         })),
@@ -199,7 +199,7 @@ where
             Err(info_hash) => self
                 .queued_events
                 .push_back(NetworkBehaviourAction::GenerateEvent(
-                    BittorrentEvent::TorrentAddedResult(Err(TorrentAddedErr::AlreadyExist {
+                    BitTorrentEvent::TorrentAddedResult(Err(TorrentAddedErr::AlreadyExist {
                         info_hash,
                         meta_info: leech,
                     })),
@@ -233,7 +233,7 @@ where
             Ok((id, actual_state)) => {
                 self.queued_events
                     .push_back(NetworkBehaviourAction::GenerateEvent(
-                        BittorrentEvent::TorrentAddedResult(Ok(TorrentAddedOk::NewSeed {
+                        BitTorrentEvent::TorrentAddedResult(Ok(TorrentAddedOk::NewSeed {
                             torrent: id,
                             state: actual_state,
                         })),
@@ -243,7 +243,7 @@ where
             Err(info_hash) => self
                 .queued_events
                 .push_back(NetworkBehaviourAction::GenerateEvent(
-                    BittorrentEvent::TorrentAddedResult(Err(TorrentAddedErr::AlreadyExist {
+                    BitTorrentEvent::TorrentAddedResult(Err(TorrentAddedErr::AlreadyExist {
                         info_hash,
                         meta_info: seed.torrent,
                     })),
@@ -264,17 +264,17 @@ where
     }
 
     /// Handles a peer that failed to send a `KeepAlive`.
-    fn on_remote_timeout(&self, peer_id: PeerId) -> Option<BittorrentEvent> {
+    fn on_remote_timeout(&self, peer_id: PeerId) -> Option<BitTorrentEvent> {
         // TODO
         None
     }
 }
 
-/// The configuration for the `Bittorrent` behaviour.
+/// The configuration for the `BitTorrent` behaviour.
 ///
-/// The configuration is consumed by [`Bittorrent::new`].
+/// The configuration is consumed by [`BitTorrent::new`].
 #[derive(Debug, Clone)]
-pub struct BittorrentConfig {
+pub struct BitTorrentConfig {
     /// cannot be higher than the active torrents
     pub max_simultaneous_downloads: Option<usize>,
     /// new torrents won't start if more are seeded/leeched
@@ -291,11 +291,11 @@ pub struct BittorrentConfig {
     pub peer_hash: Option<ShaHash>,
 }
 
-impl BittorrentConfig {
+impl BitTorrentConfig {
     pub const MAX_ACTIVE_TORRENTS: usize = 5;
 }
 
-impl Default for BittorrentConfig {
+impl Default for BitTorrentConfig {
     fn default() -> Self {
         Self {
             max_simultaneous_downloads: Some(Self::MAX_ACTIVE_TORRENTS),
@@ -309,16 +309,16 @@ impl Default for BittorrentConfig {
     }
 }
 
-impl<TSubstream, TFileSystem> NetworkBehaviour for Bittorrent<TSubstream, TFileSystem>
+impl<TSubstream, TFileSystem> NetworkBehaviour for BitTorrent<TSubstream, TFileSystem>
 where
     TSubstream: AsyncRead + AsyncWrite,
     TFileSystem: FileSystem,
 {
-    type ProtocolsHandler = BittorrentHandler<TSubstream, TorrentId>;
-    type OutEvent = BittorrentEvent;
+    type ProtocolsHandler = BitTorrentHandler<TSubstream, TorrentId>;
+    type OutEvent = BitTorrentEvent;
 
     fn new_handler(&mut self) -> Self::ProtocolsHandler {
-        BittorrentHandler::seed_and_leech()
+        BitTorrentHandler::seed_and_leech()
     }
 
     fn addresses_of_peer(&mut self, peer_id: &PeerId) -> Vec<Multiaddr> {
@@ -353,9 +353,9 @@ where
     }
 
     /// send from the handler
-    fn inject_node_event(&mut self, peer_id: PeerId, event: BittorrentHandlerEvent<TorrentId>) {
+    fn inject_node_event(&mut self, peer_id: PeerId, event: BitTorrentHandlerEvent<TorrentId>) {
         match event {
-            BittorrentHandlerEvent::HandshakeReq {
+            BitTorrentHandlerEvent::HandshakeReq {
                 handshake,
                 request_id,
             } => {
@@ -369,7 +369,7 @@ where
                         self.queued_events
                             .push_back(NetworkBehaviourAction::SendEvent {
                                 peer_id,
-                                event: BittorrentHandlerIn::HandshakeRes {
+                                event: BitTorrentHandlerIn::HandshakeRes {
                                     handshake,
                                     request_id,
                                 },
@@ -379,18 +379,18 @@ where
                         debug!("denying bad handshake request.");
                         self.queued_events
                             .push_back(NetworkBehaviourAction::GenerateEvent(
-                                BittorrentEvent::HandshakeResult(Err(err)),
+                                BitTorrentEvent::HandshakeResult(Err(err)),
                             ));
                         // drop the connection
                         self.queued_events
                             .push_back(NetworkBehaviourAction::SendEvent {
                                 peer_id,
-                                event: BittorrentHandlerIn::Disconnect(None),
+                                event: BitTorrentHandlerIn::Disconnect(None),
                             });
                     }
                 }
             }
-            BittorrentHandlerEvent::HandshakeRes {
+            BitTorrentHandlerEvent::HandshakeRes {
                 handshake,
                 user_data,
             } => {
@@ -405,7 +405,7 @@ where
                         self.queued_events
                             .push_back(NetworkBehaviourAction::SendEvent {
                                 peer_id,
-                                event: BittorrentHandlerIn::BitfieldReq {
+                                event: BitTorrentHandlerIn::BitfieldReq {
                                     index_field,
                                     user_data,
                                 },
@@ -414,18 +414,18 @@ where
                         // notify user
                         self.queued_events
                             .push_back(NetworkBehaviourAction::GenerateEvent(
-                                BittorrentEvent::HandshakeResult(Ok(handshake)),
+                                BitTorrentEvent::HandshakeResult(Ok(handshake)),
                             ));
                     }
                     Err(e) => {
                         self.queued_events
                             .push_back(NetworkBehaviourAction::GenerateEvent(
-                                BittorrentEvent::HandshakeResult(Err(e)),
+                                BitTorrentEvent::HandshakeResult(Err(e)),
                             ));
                     }
                 }
             }
-            BittorrentHandlerEvent::BitfieldReq {
+            BitTorrentHandlerEvent::BitfieldReq {
                 index_field,
                 request_id,
             } => {
@@ -436,7 +436,7 @@ where
                     self.queued_events
                         .push_back(NetworkBehaviourAction::SendEvent {
                             peer_id,
-                            event: BittorrentHandlerIn::BitfieldRes {
+                            event: BitTorrentHandlerIn::BitfieldRes {
                                 index_field,
                                 request_id,
                             },
@@ -447,11 +447,11 @@ where
                     self.queued_events
                         .push_back(NetworkBehaviourAction::SendEvent {
                             peer_id,
-                            event: BittorrentHandlerIn::Disconnect(None),
+                            event: BitTorrentHandlerIn::Disconnect(None),
                         });
                 }
             }
-            BittorrentHandlerEvent::BitfieldRes {
+            BitTorrentHandlerEvent::BitfieldRes {
                 index_field,
                 user_data,
             } => {
@@ -469,7 +469,7 @@ where
                         );
                         self.queued_events
                             .push_back(NetworkBehaviourAction::GenerateEvent(
-                                BittorrentEvent::BitfieldResult(Ok(BitfieldOk {
+                                BitTorrentEvent::BitfieldResult(Ok(BitfieldOk {
                                     torrent: user_data,
                                     peer: peer_id.clone(),
                                 })),
@@ -477,7 +477,7 @@ where
                         self.queued_events
                             .push_back(NetworkBehaviourAction::SendEvent {
                                 peer_id,
-                                event: BittorrentHandlerIn::Interest {
+                                event: BitTorrentHandlerIn::Interest {
                                     inner: InterestType::Interested,
                                 },
                             });
@@ -485,11 +485,11 @@ where
                 } else {
                     self.queued_events
                         .push_back(NetworkBehaviourAction::GenerateEvent(
-                            BittorrentEvent::BitfieldResult(Err(PeerError::NotFound(peer_id))),
+                            BitTorrentEvent::BitfieldResult(Err(PeerError::NotFound(peer_id))),
                         ));
                 }
             }
-            BittorrentHandlerEvent::GetPieceReq {
+            BitTorrentHandlerEvent::GetPieceReq {
                 request,
                 request_id,
             } => {
@@ -510,12 +510,12 @@ where
                         self.queued_events
                             .push_back(NetworkBehaviourAction::SendEvent {
                                 peer_id: peer_id.clone(),
-                                event: BittorrentHandlerIn::Reset(request_id),
+                                event: BitTorrentHandlerIn::Reset(request_id),
                             });
 
                         self.queued_events
                             .push_back(NetworkBehaviourAction::GenerateEvent(
-                                BittorrentEvent::SeedBlockResult(Err(
+                                BitTorrentEvent::SeedBlockResult(Err(
                                     SeedBlockErr::RemoteNotAllowed {
                                         peer: peer_id,
                                         block_metadata,
@@ -525,7 +525,7 @@ where
                     }
                 }
             }
-            BittorrentHandlerEvent::GetPieceRes { piece, user_data } => {
+            BitTorrentHandlerEvent::GetPieceRes { piece, user_data } => {
                 match self
                     .torrents
                     .on_block_response(user_data, &peer_id, piece.into())
@@ -534,7 +534,7 @@ where
                         debug!("received good block response {:?}", block_metadata);
                         self.queued_events
                             .push_back(NetworkBehaviourAction::GenerateEvent(
-                                BittorrentEvent::LeechBlockResult(Ok(BlockOk {
+                                BitTorrentEvent::LeechBlockResult(Ok(BlockOk {
                                     peer: peer_id,
                                     block_metadata,
                                     torrent: user_data,
@@ -545,12 +545,12 @@ where
                         debug!("received bad block response {:?}", err);
                         self.queued_events
                             .push_back(NetworkBehaviourAction::GenerateEvent(
-                                BittorrentEvent::LeechBlockResult(Err(err)),
+                                BitTorrentEvent::LeechBlockResult(Err(err)),
                             ))
                     }
                 }
             }
-            BittorrentHandlerEvent::CancelPiece {
+            BitTorrentHandlerEvent::CancelPiece {
                 request_id,
                 request,
             } => {
@@ -558,7 +558,7 @@ where
                     debug!("Cancelled read by remote {:?}", peer);
                     self.queued_events
                         .push_back(NetworkBehaviourAction::GenerateEvent(
-                            BittorrentEvent::SeedBlockResult(Ok(SeedBlockOk::CancelledByRemote {
+                            BitTorrentEvent::SeedBlockResult(Ok(SeedBlockOk::CancelledByRemote {
                                 peer: peer_id,
                                 block_metadata: request.into(),
                             })),
@@ -566,17 +566,17 @@ where
                 } else {
                     self.queued_events
                         .push_back(NetworkBehaviourAction::GenerateEvent(
-                            BittorrentEvent::SeedBlockResult(Err(SeedBlockErr::NotFound(peer_id))),
+                            BitTorrentEvent::SeedBlockResult(Err(SeedBlockErr::NotFound(peer_id))),
                         ));
                 }
             }
-            BittorrentHandlerEvent::Choke { inner } => {
+            BitTorrentHandlerEvent::Choke { inner } => {
                 if let Some((torrent_id, old_choke_ty)) =
                     self.torrents.on_choke_by_remote(&peer_id, inner)
                 {
                     self.queued_events
                         .push_back(NetworkBehaviourAction::GenerateEvent(
-                            BittorrentEvent::ChokeResult(Ok(ChokeOk {
+                            BitTorrentEvent::ChokeResult(Ok(ChokeOk {
                                 torrent: torrent_id,
                                 peer: peer_id,
                                 old_choke_ty,
@@ -586,25 +586,25 @@ where
                 } else {
                     self.queued_events
                         .push_back(NetworkBehaviourAction::GenerateEvent(
-                            BittorrentEvent::ChokeResult(Err(PeerError::NotFound(peer_id))),
+                            BitTorrentEvent::ChokeResult(Err(PeerError::NotFound(peer_id))),
                         ))
                 }
             }
-            BittorrentHandlerEvent::Interest { inner } => {
+            BitTorrentHandlerEvent::Interest { inner } => {
                 debug!("Received interest {:?} from remote {:?}", inner, peer_id);
                 let interest = self.torrents.on_interest_by_remote(peer_id, inner);
                 // TODO optimistic unchoking if remote is interested
                 self.queued_events
                     .push_back(NetworkBehaviourAction::GenerateEvent(
-                        BittorrentEvent::InterestResult(interest),
+                        BitTorrentEvent::InterestResult(interest),
                     ))
             }
-            BittorrentHandlerEvent::Have { index } => {
+            BitTorrentHandlerEvent::Have { index } => {
                 if let Some(valid_piece) = self.torrents.on_remote_have(&peer_id, index as usize) {
                     if valid_piece {
                         self.queued_events
                             .push_back(NetworkBehaviourAction::GenerateEvent(
-                                BittorrentEvent::HaveResult(Ok(HaveOk {
+                                BitTorrentEvent::HaveResult(Ok(HaveOk {
                                     peer: peer_id,
                                     piece: index,
                                 })),
@@ -612,25 +612,25 @@ where
                     } else {
                         self.queued_events
                             .push_back(NetworkBehaviourAction::GenerateEvent(
-                                BittorrentEvent::HaveResult(Err(HaveErr::InvalidIndex(index))),
+                                BitTorrentEvent::HaveResult(Err(HaveErr::InvalidIndex(index))),
                             ))
                     }
                 } else {
                     self.queued_events
                         .push_back(NetworkBehaviourAction::GenerateEvent(
-                            BittorrentEvent::HaveResult(Err(HaveErr::NotFound(peer_id))),
+                            BitTorrentEvent::HaveResult(Err(HaveErr::NotFound(peer_id))),
                         ))
                 }
             }
-            BittorrentHandlerEvent::KeepAlive { timestamp } => {
+            BitTorrentHandlerEvent::KeepAlive { timestamp } => {
                 self.queued_events
                     .push_back(NetworkBehaviourAction::GenerateEvent(
-                        BittorrentEvent::KeepAliveResult(
+                        BitTorrentEvent::KeepAliveResult(
                             self.torrents.on_keep_alive_by_remote(peer_id, timestamp),
                         ),
                     ))
             }
-            BittorrentHandlerEvent::TorrentErr { .. } => {}
+            BitTorrentHandlerEvent::TorrentErr { .. } => {}
         }
     }
 
@@ -678,7 +678,7 @@ where
                         // a new keepalive msg needs to be send
                         return Async::Ready(NetworkBehaviourAction::SendEvent {
                             peer_id,
-                            event: BittorrentHandlerIn::KeepAlive,
+                            event: BitTorrentHandlerIn::KeepAlive,
                         });
                     }
                     TorrentPoolState::Waiting(torrent) => {
@@ -688,14 +688,14 @@ where
                     TorrentPoolState::Finished(torrent_id) => {
                         debug!("torrent complete {:?}", torrent_id);
                         return Async::Ready(NetworkBehaviourAction::GenerateEvent(
-                            BittorrentEvent::TorrentFinished(torrent_id),
+                            BitTorrentEvent::TorrentFinished(torrent_id),
                         ));
                     }
                     TorrentPoolState::NextBlock(block) => {
                         debug!("requesting new block {:?}", block);
                         return Async::Ready(NetworkBehaviourAction::SendEvent {
                             peer_id: block.peer_id,
-                            event: BittorrentHandlerIn::GetPieceReq {
+                            event: BitTorrentHandlerIn::GetPieceReq {
                                 user_data: block.torrent_id,
                                 request: block.block_metadata.into(),
                             },
@@ -714,7 +714,7 @@ where
                             DiskMessageOut::TorrentSynced(id) => {
                                 self.queued_events.push_back(
                                     NetworkBehaviourAction::GenerateEvent(
-                                        BittorrentEvent::DiskResult(Ok(
+                                        BitTorrentEvent::DiskResult(Ok(
                                             DiskMessageOut::TorrentSynced(id),
                                         )),
                                     ),
@@ -729,7 +729,7 @@ where
                                     self.queued_events.push_back(
                                         NetworkBehaviourAction::SendEvent {
                                             peer_id,
-                                            event: BittorrentHandlerIn::GetPieceRes {
+                                            event: BitTorrentHandlerIn::GetPieceRes {
                                                 piece: block.into_piece(),
                                                 request_id,
                                             },
@@ -750,7 +750,7 @@ where
                                         self.queued_events.push_back(
                                             NetworkBehaviourAction::SendEvent {
                                                 peer_id: peer.clone(),
-                                                event: BittorrentHandlerIn::Have { index },
+                                                event: BitTorrentHandlerIn::Have { index },
                                             },
                                         );
                                     }
@@ -760,7 +760,7 @@ where
                             DiskMessageOut::ReadBlockError(id, err) => {
                                 debug!("encountered error while reading block {:?}", err);
                                 return Async::Ready(NetworkBehaviourAction::GenerateEvent(
-                                    BittorrentEvent::DiskResult(Ok(
+                                    BitTorrentEvent::DiskResult(Ok(
                                         DiskMessageOut::ReadBlockError(id, err),
                                     )),
                                 ));
@@ -774,7 +774,7 @@ where
                     Err(err) => {
                         debug!("diskmanager error");
                         return Async::Ready(NetworkBehaviourAction::GenerateEvent(
-                            BittorrentEvent::DiskResult(Err(())),
+                            BitTorrentEvent::DiskResult(Err(())),
                         ));
                     }
                     Ok(Async::NotReady) => {
@@ -794,10 +794,10 @@ where
     }
 }
 
-/// The events produced by the `Bittorrent` behaviour.
+/// The events produced by the `BitTorrent` behaviour.
 ///
-/// See [`Bittorrent::poll`].
-pub enum BittorrentEvent {
+/// See [`BitTorrent::poll`].
+pub enum BitTorrentEvent {
     HandshakeResult(HandshakeResult),
     LeechBlockResult(LeechBlockResult),
     BitfieldResult(BitfieldResult),
@@ -811,17 +811,17 @@ pub enum BittorrentEvent {
     TorrentAddedResult(TorrentAddedResult),
 }
 
-/// The result of [`Bittorrent::handshake`].
+/// The result of [`BitTorrent::handshake`].
 pub type HandshakeResult = Result<HandshakeOk, HandshakeError>;
 
 /// The result of a diskmanager task
 pub type DiskResult = Result<DiskMessageOut, ()>;
 
-/// The successful result of [`Bittorrent::handshake`].
+/// The successful result of [`BitTorrent::handshake`].
 #[derive(Debug, Clone)]
 pub struct HandshakeOk(pub PeerId);
 
-/// The error result of [`Bittorrent::handshake`].
+/// The error result of [`BitTorrent::handshake`].
 #[derive(Debug, Clone)]
 pub enum HandshakeError {
     InfoHashMismatch(PeerId, Option<TorrentId>),

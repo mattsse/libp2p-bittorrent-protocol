@@ -24,11 +24,11 @@ pub mod message;
 pub mod tracker;
 
 #[derive(Debug, Clone)]
-pub struct BittorrentProtocolConfig {
+pub struct BitTorrentProtocolConfig {
     protocol_name: Cow<'static, [u8]>,
 }
 
-impl BittorrentProtocolConfig {
+impl BitTorrentProtocolConfig {
     /// Modifies the protocol name used on the wire. Can be used to create
     /// incompatibilities between networks on purpose.
     pub fn with_protocol_name(mut self, name: impl Into<Cow<'static, [u8]>>) -> Self {
@@ -37,15 +37,15 @@ impl BittorrentProtocolConfig {
     }
 }
 
-impl Default for BittorrentProtocolConfig {
+impl Default for BitTorrentProtocolConfig {
     fn default() -> Self {
-        BittorrentProtocolConfig {
+        BitTorrentProtocolConfig {
             protocol_name: Cow::Borrowed(b"/btt/1.0.0"),
         }
     }
 }
 
-impl UpgradeInfo for BittorrentProtocolConfig {
+impl UpgradeInfo for BitTorrentProtocolConfig {
     type Info = Cow<'static, [u8]>;
     type InfoIter = iter::Once<Self::Info>;
 
@@ -57,7 +57,7 @@ impl UpgradeInfo for BittorrentProtocolConfig {
 /// Stream and Sink of `PeerMessage`
 pub type BttStreamSink<S> = Framed<S, PeerWireCodec>;
 
-impl<C> InboundUpgrade<C> for BittorrentProtocolConfig
+impl<C> InboundUpgrade<C> for BitTorrentProtocolConfig
 where
     C: AsyncRead + AsyncWrite,
 {
@@ -72,7 +72,7 @@ where
     }
 }
 
-impl<C> OutboundUpgrade<C> for BittorrentProtocolConfig
+impl<C> OutboundUpgrade<C> for BitTorrentProtocolConfig
 where
     C: AsyncRead + AsyncWrite,
 {

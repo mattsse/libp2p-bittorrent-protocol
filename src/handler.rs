@@ -20,7 +20,7 @@ use wasm_timer::Instant;
 
 use crate::util::ShaHash;
 
-use crate::behavior::{Bittorrent, SeedLeechConfig};
+use crate::behavior::{BitTorrent, SeedLeechConfig};
 use crate::bitfield::BitField;
 use crate::disk::torrent::TorrentSeed;
 use crate::error;
@@ -28,21 +28,21 @@ use crate::peer::torrent::{Torrent, TorrentId, TorrentPeer};
 use crate::peer::{BttPeer, ChokeType, InterestType};
 use crate::piece::Piece;
 use crate::proto::message::{Handshake, PeerMessage, PeerRequest};
-use crate::proto::{BittorrentProtocolConfig, BttStreamSink};
+use crate::proto::{BitTorrentProtocolConfig, BttStreamSink};
 use crate::torrent::MetaInfo;
 
-/// Protocol handler that handles Bittorrent communications with the remote.
+/// Protocol handler that handles BitTorrent communications with the remote.
 ///
-/// The handler will automatically open a Bittorrent substream with the remote
+/// The handler will automatically open a BitTorrent substream with the remote
 /// for each request we make.
 ///
 /// It also handles requests made by the remote.
-pub struct BittorrentHandler<TSubstream, TUserData>
+pub struct BitTorrentHandler<TSubstream, TUserData>
 where
     TSubstream: AsyncRead + AsyncWrite,
 {
-    /// Configuration for the Bittorrent protocol.
-    config: BittorrentProtocolConfig,
+    /// Configuration for the BitTorrent protocol.
+    config: BitTorrentProtocolConfig,
     /// List of active substreams with the state they are in.
     substreams: Vec<SubstreamState<Negotiated<TSubstream>, TUserData>>,
     /// Until when to keep the connection alive.
@@ -53,29 +53,29 @@ where
     next_connec_unique_id: UniqueConnecId,
 }
 
-impl<TSubstream, TUserData> BittorrentHandler<TSubstream, TUserData>
+impl<TSubstream, TUserData> BitTorrentHandler<TSubstream, TUserData>
 where
     TSubstream: AsyncRead + AsyncWrite,
 {
-    /// Create a `BittorrentHandler` that only allows leeching from remote but
+    /// Create a `BitTorrentHandler` that only allows leeching from remote but
     /// denying incoming piece request.
     pub fn leech_only() -> Self {
-        BittorrentHandler::with_seed_leech_config(SeedLeechConfig::LeechOnly)
+        BitTorrentHandler::with_seed_leech_config(SeedLeechConfig::LeechOnly)
     }
 
-    /// Create a `BittorrentHandler` that only allows seeding to remotes but
+    /// Create a `BitTorrentHandler` that only allows seeding to remotes but
     /// doesn't request any pieces.
     pub fn seed_only() -> Self {
-        BittorrentHandler::with_seed_leech_config(SeedLeechConfig::SeedOnly)
+        BitTorrentHandler::with_seed_leech_config(SeedLeechConfig::SeedOnly)
     }
 
-    /// Create a `BittorrentHandler` that seeds and also leeches.
+    /// Create a `BitTorrentHandler` that seeds and also leeches.
     pub fn seed_and_leech() -> Self {
-        BittorrentHandler::with_seed_leech_config(SeedLeechConfig::SeedAndLeech)
+        BitTorrentHandler::with_seed_leech_config(SeedLeechConfig::SeedAndLeech)
     }
 
     pub fn with_seed_leech_config(seed_leech: SeedLeechConfig) -> Self {
-        BittorrentHandler {
+        BitTorrentHandler {
             config: Default::default(),
             substreams: Vec::new(),
             keep_alive: KeepAlive::Yes,
@@ -102,12 +102,12 @@ where
     OutWaitingAnswer(BttStreamSink<TSubstream>, TUserData, Instant),
     /// An error happened on the substream and we should report the error to the
     /// user.
-    OutReportError(BittorrentHandlerTorrentErr, TUserData),
+    OutReportError(BitTorrentHandlerTorrentErr, TUserData),
     /// The substream is being closed.
     OutClosing(BttStreamSink<TSubstream>),
     /// Waiting for a request from the remote.
     InWaitingMessage(UniqueConnecId, BttStreamSink<TSubstream>),
-    /// Waiting for the user to send a `BittorrentHandlerIn` event containing
+    /// Waiting for the user to send a `BitTorrentHandlerIn` event containing
     /// the response.
     InWaitingUser(UniqueConnecId, BttStreamSink<TSubstream>),
     /// Waiting to send an answer back to the remote.
@@ -149,17 +149,17 @@ where
     }
 }
 
-impl<TSubstream, TUserData> ProtocolsHandler for BittorrentHandler<TSubstream, TUserData>
+impl<TSubstream, TUserData> ProtocolsHandler for BitTorrentHandler<TSubstream, TUserData>
 where
     TSubstream: AsyncRead + AsyncWrite,
     TUserData: Clone,
 {
-    type InEvent = BittorrentHandlerIn<TUserData>;
-    type OutEvent = BittorrentHandlerEvent<TUserData>;
+    type InEvent = BitTorrentHandlerIn<TUserData>;
+    type OutEvent = BitTorrentHandlerEvent<TUserData>;
     type Error = error::Error;
     type Substream = TSubstream;
-    type InboundProtocol = BittorrentProtocolConfig;
-    type OutboundProtocol = BittorrentProtocolConfig;
+    type InboundProtocol = BitTorrentProtocolConfig;
+    type OutboundProtocol = BitTorrentProtocolConfig;
     // Message of the request to send to the remote, and user data if we expect an
     // answer.
     type OutboundOpenInfo = (PeerMessage, Option<TUserData>);
@@ -191,16 +191,16 @@ where
     /// If a client receives a handshake with an info_hash that it is not
     /// currently serving, then the client must drop the connection. open
     /// one substream per request
-    fn inject_event(&mut self, message: BittorrentHandlerIn<TUserData>) {
+    fn inject_event(&mut self, message: BitTorrentHandlerIn<TUserData>) {
         match message {
-            BittorrentHandlerIn::Disconnect(timeout) => {
+            BitTorrentHandlerIn::Disconnect(timeout) => {
                 if let Some(timeout) = timeout {
                     self.keep_alive = KeepAlive::Until(timeout);
                 } else {
                     self.keep_alive = KeepAlive::No;
                 }
             }
-            BittorrentHandlerIn::Reset(request_id) => {
+            BitTorrentHandlerIn::Reset(request_id) => {
                 let pos = self.substreams.iter().position(|state| match state {
                     SubstreamState::InWaitingUser(conn_id, _) => {
                         conn_id == &request_id.connec_unique_id
@@ -211,7 +211,7 @@ where
                     let _ = self.substreams.remove(pos).try_close();
                 }
             }
-            BittorrentHandlerIn::HandshakeReq {
+            BitTorrentHandlerIn::HandshakeReq {
                 handshake,
                 user_data,
             } => {
@@ -221,7 +221,7 @@ where
                     Some(user_data),
                 ));
             }
-            BittorrentHandlerIn::BitfieldReq {
+            BitTorrentHandlerIn::BitfieldReq {
                 index_field,
                 user_data,
             } => {
@@ -229,7 +229,7 @@ where
                 self.substreams
                     .push(SubstreamState::OutPendingOpen(msg, Some(user_data)));
             }
-            BittorrentHandlerIn::Choke { inner } => {
+            BitTorrentHandlerIn::Choke { inner } => {
                 let msg = match inner {
                     ChokeType::Choked => PeerMessage::Choke,
                     ChokeType::UnChoked => PeerMessage::UnChoke,
@@ -237,7 +237,7 @@ where
                 self.substreams
                     .push(SubstreamState::OutPendingOpen(msg, None));
             }
-            BittorrentHandlerIn::Interest { inner } => {
+            BitTorrentHandlerIn::Interest { inner } => {
                 let msg = match inner {
                     InterestType::Interested => PeerMessage::Interested,
                     InterestType::NotInterested => PeerMessage::NotInterested,
@@ -245,13 +245,13 @@ where
                 self.substreams
                     .push(SubstreamState::OutPendingOpen(msg, None));
             }
-            BittorrentHandlerIn::GetPieceReq { request, user_data } => {
+            BitTorrentHandlerIn::GetPieceReq { request, user_data } => {
                 self.substreams.push(SubstreamState::OutPendingOpen(
                     PeerMessage::Request { request },
                     Some(user_data),
                 ));
             }
-            BittorrentHandlerIn::GetPieceRes { piece, request_id } => {
+            BitTorrentHandlerIn::GetPieceRes { piece, request_id } => {
                 let pos = self.substreams.iter().position(|state| match state {
                     SubstreamState::InWaitingUser(conn_id, _) => {
                         conn_id == &request_id.connec_unique_id
@@ -270,7 +270,7 @@ where
                     ));
                 }
             }
-            BittorrentHandlerIn::CancelPiece {
+            BitTorrentHandlerIn::CancelPiece {
                 request,
                 request_id,
             } => {
@@ -290,17 +290,17 @@ where
                     ));
                 }
             }
-            BittorrentHandlerIn::Have { index } => {
+            BitTorrentHandlerIn::Have { index } => {
                 self.substreams.push(SubstreamState::OutPendingOpen(
                     PeerMessage::Have { index },
                     None,
                 ));
             }
-            BittorrentHandlerIn::KeepAlive => {
+            BitTorrentHandlerIn::KeepAlive => {
                 self.substreams
                     .push(SubstreamState::OutPendingOpen(PeerMessage::KeepAlive, None));
             }
-            BittorrentHandlerIn::HandshakeRes {
+            BitTorrentHandlerIn::HandshakeRes {
                 handshake,
                 request_id,
             } => {
@@ -323,7 +323,7 @@ where
                     ));
                 }
             }
-            BittorrentHandlerIn::BitfieldRes {
+            BitTorrentHandlerIn::BitfieldRes {
                 index_field,
                 request_id,
             } => {
@@ -410,7 +410,7 @@ where
 }
 /// Event to send to the handler.
 #[derive(Debug)]
-pub enum BittorrentHandlerIn<TUserData> {
+pub enum BitTorrentHandlerIn<TUserData> {
     /// Signals that the connection should disconnected
     Disconnect(Option<Instant>),
     /// Resets the (sub)stream associated with the given request ID,
@@ -420,7 +420,7 @@ pub enum BittorrentHandlerIn<TUserData> {
     /// can be used as an alternative to letting requests simply time
     /// out on the remote peer, thus potentially avoiding some delay
     /// for the query on the remote.
-    Reset(BittorrentRequestId),
+    Reset(BitTorrentRequestId),
     /// The initial contact to a peer
     HandshakeReq {
         handshake: Handshake,
@@ -430,7 +430,7 @@ pub enum BittorrentHandlerIn<TUserData> {
     /// The initial contact to a peer
     HandshakeRes {
         handshake: Handshake,
-        request_id: BittorrentRequestId,
+        request_id: BitTorrentRequestId,
     },
     /// The bitfield message may only be sent immediately after the handshaking
     /// sequence is completed, and before any other messages are sent. It is
@@ -443,7 +443,7 @@ pub enum BittorrentHandlerIn<TUserData> {
     BitfieldRes {
         index_field: BitField,
         /// Custom data. Passed back in the out event when the results arrive.
-        request_id: BittorrentRequestId,
+        request_id: BitTorrentRequestId,
     },
     Choke {
         inner: ChokeType,
@@ -463,11 +463,11 @@ pub enum BittorrentHandlerIn<TUserData> {
         /// Identifier of the request that was made by the remote.
         ///
         /// It is a logic error to use an id of the handler of a different node.
-        request_id: BittorrentRequestId,
+        request_id: BitTorrentRequestId,
     },
     CancelPiece {
         request: PeerRequest,
-        request_id: BittorrentRequestId,
+        request_id: BitTorrentRequestId,
     },
     Have {
         /// index of a piece we got
@@ -476,13 +476,13 @@ pub enum BittorrentHandlerIn<TUserData> {
     KeepAlive,
 }
 
-/// Event produced by the Bittorrent handler.
+/// Event produced by the BitTorrent handler.
 #[derive(Debug)]
-pub enum BittorrentHandlerEvent<TUserData> {
+pub enum BitTorrentHandlerEvent<TUserData> {
     /// The initial contact to a peer
     HandshakeReq {
         handshake: Handshake,
-        request_id: BittorrentRequestId,
+        request_id: BitTorrentRequestId,
     },
     /// The initial contact to a peer
     HandshakeRes {
@@ -495,7 +495,7 @@ pub enum BittorrentHandlerEvent<TUserData> {
     /// optional, and need not be sent if a client has no pieces
     BitfieldReq {
         index_field: BitField,
-        request_id: BittorrentRequestId,
+        request_id: BitTorrentRequestId,
     },
     BitfieldRes {
         index_field: BitField,
@@ -509,7 +509,7 @@ pub enum BittorrentHandlerEvent<TUserData> {
         /// Identifier of the request that was made by the remote.
         ///
         /// It is a logic error to use an id of the handler of a different node.
-        request_id: BittorrentRequestId,
+        request_id: BitTorrentRequestId,
     },
     GetPieceRes {
         piece: Piece,
@@ -519,7 +519,7 @@ pub enum BittorrentHandlerEvent<TUserData> {
     CancelPiece {
         request: PeerRequest,
         /// Custom data. Passed back in the out event when the results arrive.
-        request_id: BittorrentRequestId,
+        request_id: BitTorrentRequestId,
     },
     Choke {
         inner: ChokeType,
@@ -533,7 +533,7 @@ pub enum BittorrentHandlerEvent<TUserData> {
     /// An error happened when torrenting.
     TorrentErr {
         /// The error that happened.
-        error: BittorrentHandlerTorrentErr,
+        error: BitTorrentHandlerTorrentErr,
         /// The user data passed to the req.
         user_data: Option<TUserData>,
     },
@@ -548,7 +548,7 @@ pub enum BittorrentHandlerEvent<TUserData> {
 /// We don't implement `Clone` on purpose, in order to prevent users from
 /// answering the same request twice.
 #[derive(Debug, PartialEq, Eq)]
-pub struct BittorrentRequestId {
+pub struct BitTorrentRequestId {
     /// Unique identifier for an incoming connection.
     connec_unique_id: UniqueConnecId,
 }
@@ -559,7 +559,7 @@ struct UniqueConnecId(u64);
 
 /// Error that can happen while torrenting.
 #[derive(Debug)]
-pub enum BittorrentHandlerTorrentErr {
+pub enum BitTorrentHandlerTorrentErr {
     /// Error while trying to perform the query.
     Upgrade(ProtocolsHandlerUpgrErr<io::Error>),
     /// Received an answer that doesn't correspond to the request.
@@ -568,37 +568,37 @@ pub enum BittorrentHandlerTorrentErr {
     Io(io::Error),
 }
 
-impl fmt::Display for BittorrentHandlerTorrentErr {
+impl fmt::Display for BitTorrentHandlerTorrentErr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            BittorrentHandlerTorrentErr::Upgrade(err) => {
-                write!(f, "Error while performing Bittorrent action: {}", err)
+            BitTorrentHandlerTorrentErr::Upgrade(err) => {
+                write!(f, "Error while performing BitTorrent action: {}", err)
             }
-            BittorrentHandlerTorrentErr::UnexpectedMessage(_) => write!(
+            BitTorrentHandlerTorrentErr::UnexpectedMessage(_) => write!(
                 f,
-                "Remote answered our Bittorrent request with the wrong message type"
+                "Remote answered our BitTorrent request with the wrong message type"
             ),
-            BittorrentHandlerTorrentErr::Io(err) => {
-                write!(f, "I/O error during a Bittorrent action: {}", err)
+            BitTorrentHandlerTorrentErr::Io(err) => {
+                write!(f, "I/O error during a BitTorrent action: {}", err)
             }
         }
     }
 }
 
-impl std::error::Error for BittorrentHandlerTorrentErr {
+impl std::error::Error for BitTorrentHandlerTorrentErr {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            BittorrentHandlerTorrentErr::Upgrade(err) => Some(err),
-            BittorrentHandlerTorrentErr::UnexpectedMessage(_) => None,
-            BittorrentHandlerTorrentErr::Io(err) => Some(err),
+            BitTorrentHandlerTorrentErr::Upgrade(err) => Some(err),
+            BitTorrentHandlerTorrentErr::UnexpectedMessage(_) => None,
+            BitTorrentHandlerTorrentErr::Io(err) => Some(err),
         }
     }
 }
 
-impl From<ProtocolsHandlerUpgrErr<io::Error>> for BittorrentHandlerTorrentErr {
+impl From<ProtocolsHandlerUpgrErr<io::Error>> for BitTorrentHandlerTorrentErr {
     #[inline]
     fn from(err: ProtocolsHandlerUpgrErr<io::Error>) -> Self {
-        BittorrentHandlerTorrentErr::Upgrade(err)
+        BitTorrentHandlerTorrentErr::Upgrade(err)
     }
 }
 
@@ -608,14 +608,14 @@ impl From<ProtocolsHandlerUpgrErr<io::Error>> for BittorrentHandlerTorrentErr {
 /// the substream should be polled again.
 fn advance_substream<TSubstream, TUserData>(
     state: SubstreamState<TSubstream, TUserData>,
-    upgrade: BittorrentProtocolConfig,
+    upgrade: BitTorrentProtocolConfig,
 ) -> (
     Option<SubstreamState<TSubstream, TUserData>>,
     Option<
         ProtocolsHandlerEvent<
-            BittorrentProtocolConfig,
+            BitTorrentProtocolConfig,
             (PeerMessage, Option<TUserData>),
-            BittorrentHandlerEvent<TUserData>,
+            BitTorrentHandlerEvent<TUserData>,
         >,
     >,
     bool,
@@ -646,8 +646,8 @@ where
                 Err(error) => {
                     let event = if let Some(user_data) = user_data {
                         Some(ProtocolsHandlerEvent::Custom(
-                            BittorrentHandlerEvent::TorrentErr {
-                                error: BittorrentHandlerTorrentErr::Io(error),
+                            BitTorrentHandlerEvent::TorrentErr {
+                                error: BitTorrentHandlerTorrentErr::Io(error),
                                 user_data: Some(user_data),
                             },
                         ))
@@ -684,8 +684,8 @@ where
                 Err(error) => {
                     let event = if let Some(user_data) = user_data {
                         Some(ProtocolsHandlerEvent::Custom(
-                            BittorrentHandlerEvent::TorrentErr {
-                                error: BittorrentHandlerTorrentErr::Io(error),
+                            BitTorrentHandlerEvent::TorrentErr {
+                                error: BitTorrentHandlerTorrentErr::Io(error),
                                 user_data: Some(user_data),
                             },
                         ))
@@ -716,15 +716,15 @@ where
                     false,
                 ),
                 Err(error) => {
-                    let event = BittorrentHandlerEvent::TorrentErr {
-                        error: BittorrentHandlerTorrentErr::Io(error),
+                    let event = BitTorrentHandlerEvent::TorrentErr {
+                        error: BitTorrentHandlerTorrentErr::Io(error),
                         user_data: Some(user_data),
                     };
                     (None, Some(ProtocolsHandlerEvent::Custom(event)), false)
                 }
                 Ok(Async::Ready(None)) => {
-                    let event = BittorrentHandlerEvent::TorrentErr {
-                        error: BittorrentHandlerTorrentErr::Io(io::ErrorKind::UnexpectedEof.into()),
+                    let event = BitTorrentHandlerEvent::TorrentErr {
+                        error: BitTorrentHandlerTorrentErr::Io(io::ErrorKind::UnexpectedEof.into()),
                         user_data: Some(user_data),
                     };
                     (None, Some(ProtocolsHandlerEvent::Custom(event)), false)
@@ -732,7 +732,7 @@ where
             }
         }
         SubstreamState::OutReportError(error, user_data) => {
-            let event = BittorrentHandlerEvent::TorrentErr {
+            let event = BitTorrentHandlerEvent::TorrentErr {
                 error,
                 user_data: Some(user_data),
             };
@@ -805,48 +805,48 @@ where
     }
 }
 
-/// Processes a Bittorrent message that's expected to be a request from a
+/// Processes a BitTorrent message that's expected to be a request from a
 /// remote.
 fn process_btt_in<TUserData>(
     event: PeerMessage,
     connec_unique_id: UniqueConnecId,
-) -> BittorrentHandlerEvent<TUserData> {
+) -> BitTorrentHandlerEvent<TUserData> {
     match event {
-        PeerMessage::Handshake { handshake } => BittorrentHandlerEvent::HandshakeReq {
+        PeerMessage::Handshake { handshake } => BitTorrentHandlerEvent::HandshakeReq {
             handshake,
-            request_id: BittorrentRequestId { connec_unique_id },
+            request_id: BitTorrentRequestId { connec_unique_id },
         },
-        PeerMessage::Bitfield { index_field } => BittorrentHandlerEvent::BitfieldReq {
+        PeerMessage::Bitfield { index_field } => BitTorrentHandlerEvent::BitfieldReq {
             index_field,
-            request_id: BittorrentRequestId { connec_unique_id },
+            request_id: BitTorrentRequestId { connec_unique_id },
         },
 
-        PeerMessage::KeepAlive => BittorrentHandlerEvent::KeepAlive {
+        PeerMessage::KeepAlive => BitTorrentHandlerEvent::KeepAlive {
             timestamp: Instant::now(),
         },
-        PeerMessage::Choke => BittorrentHandlerEvent::Choke {
+        PeerMessage::Choke => BitTorrentHandlerEvent::Choke {
             inner: ChokeType::Choked,
         },
-        PeerMessage::UnChoke => BittorrentHandlerEvent::Choke {
+        PeerMessage::UnChoke => BitTorrentHandlerEvent::Choke {
             inner: ChokeType::UnChoked,
         },
-        PeerMessage::Interested => BittorrentHandlerEvent::Interest {
+        PeerMessage::Interested => BitTorrentHandlerEvent::Interest {
             inner: InterestType::Interested,
         },
-        PeerMessage::NotInterested => BittorrentHandlerEvent::Interest {
+        PeerMessage::NotInterested => BitTorrentHandlerEvent::Interest {
             inner: InterestType::NotInterested,
         },
-        PeerMessage::Have { index } => BittorrentHandlerEvent::Have { index },
-        PeerMessage::Request { request } => BittorrentHandlerEvent::GetPieceReq {
+        PeerMessage::Have { index } => BitTorrentHandlerEvent::Have { index },
+        PeerMessage::Request { request } => BitTorrentHandlerEvent::GetPieceReq {
             request,
-            request_id: BittorrentRequestId { connec_unique_id },
+            request_id: BitTorrentRequestId { connec_unique_id },
         },
-        PeerMessage::Cancel { request } => BittorrentHandlerEvent::CancelPiece {
+        PeerMessage::Cancel { request } => BitTorrentHandlerEvent::CancelPiece {
             request,
-            request_id: BittorrentRequestId { connec_unique_id },
+            request_id: BitTorrentRequestId { connec_unique_id },
         },
-        msg @ PeerMessage::Piece { .. } => BittorrentHandlerEvent::TorrentErr {
-            error: BittorrentHandlerTorrentErr::UnexpectedMessage(msg),
+        msg @ PeerMessage::Piece { .. } => BitTorrentHandlerEvent::TorrentErr {
+            error: BitTorrentHandlerTorrentErr::UnexpectedMessage(msg),
             user_data: None,
         },
         PeerMessage::Port { port } => {
@@ -856,52 +856,52 @@ fn process_btt_in<TUserData>(
     }
 }
 
-/// Process a Bittorrent message that's supposed to be a response to one of our
+/// Process a BitTorrent message that's supposed to be a response to one of our
 /// requests. Since we open a new substream for each message, receiving a
 /// message or an request shouldn't happen and we return an error instead
 fn process_btt_out<TUserData>(
     msg: PeerMessage,
     user_data: TUserData,
-) -> BittorrentHandlerEvent<TUserData> {
+) -> BitTorrentHandlerEvent<TUserData> {
     match msg {
-        msg @ PeerMessage::KeepAlive => BittorrentHandlerEvent::TorrentErr {
-            error: BittorrentHandlerTorrentErr::UnexpectedMessage(msg),
+        msg @ PeerMessage::KeepAlive => BitTorrentHandlerEvent::TorrentErr {
+            error: BitTorrentHandlerTorrentErr::UnexpectedMessage(msg),
             user_data: Some(user_data),
         },
-        msg @ PeerMessage::Choke => BittorrentHandlerEvent::TorrentErr {
-            error: BittorrentHandlerTorrentErr::UnexpectedMessage(msg),
+        msg @ PeerMessage::Choke => BitTorrentHandlerEvent::TorrentErr {
+            error: BitTorrentHandlerTorrentErr::UnexpectedMessage(msg),
             user_data: Some(user_data),
         },
-        msg @ PeerMessage::UnChoke => BittorrentHandlerEvent::TorrentErr {
-            error: BittorrentHandlerTorrentErr::UnexpectedMessage(msg),
+        msg @ PeerMessage::UnChoke => BitTorrentHandlerEvent::TorrentErr {
+            error: BitTorrentHandlerTorrentErr::UnexpectedMessage(msg),
             user_data: Some(user_data),
         },
-        msg @ PeerMessage::Interested => BittorrentHandlerEvent::TorrentErr {
-            error: BittorrentHandlerTorrentErr::UnexpectedMessage(msg),
+        msg @ PeerMessage::Interested => BitTorrentHandlerEvent::TorrentErr {
+            error: BitTorrentHandlerTorrentErr::UnexpectedMessage(msg),
             user_data: Some(user_data),
         },
-        msg @ PeerMessage::NotInterested => BittorrentHandlerEvent::TorrentErr {
-            error: BittorrentHandlerTorrentErr::UnexpectedMessage(msg),
+        msg @ PeerMessage::NotInterested => BitTorrentHandlerEvent::TorrentErr {
+            error: BitTorrentHandlerTorrentErr::UnexpectedMessage(msg),
             user_data: Some(user_data),
         },
-        msg @ PeerMessage::Have { .. } => BittorrentHandlerEvent::TorrentErr {
-            error: BittorrentHandlerTorrentErr::UnexpectedMessage(msg),
+        msg @ PeerMessage::Have { .. } => BitTorrentHandlerEvent::TorrentErr {
+            error: BitTorrentHandlerTorrentErr::UnexpectedMessage(msg),
             user_data: Some(user_data),
         },
-        PeerMessage::Bitfield { index_field } => BittorrentHandlerEvent::BitfieldRes {
+        PeerMessage::Bitfield { index_field } => BitTorrentHandlerEvent::BitfieldRes {
             index_field,
             user_data,
         },
-        msg @ PeerMessage::Request { .. } => BittorrentHandlerEvent::TorrentErr {
-            error: BittorrentHandlerTorrentErr::UnexpectedMessage(msg),
+        msg @ PeerMessage::Request { .. } => BitTorrentHandlerEvent::TorrentErr {
+            error: BitTorrentHandlerTorrentErr::UnexpectedMessage(msg),
             user_data: Some(user_data),
         },
-        msg @ PeerMessage::Cancel { .. } => BittorrentHandlerEvent::TorrentErr {
-            error: BittorrentHandlerTorrentErr::UnexpectedMessage(msg),
+        msg @ PeerMessage::Cancel { .. } => BitTorrentHandlerEvent::TorrentErr {
+            error: BitTorrentHandlerTorrentErr::UnexpectedMessage(msg),
             user_data: Some(user_data),
         },
-        PeerMessage::Piece { piece } => BittorrentHandlerEvent::GetPieceRes { piece, user_data },
-        PeerMessage::Handshake { handshake } => BittorrentHandlerEvent::HandshakeRes {
+        PeerMessage::Piece { piece } => BitTorrentHandlerEvent::GetPieceRes { piece, user_data },
+        PeerMessage::Handshake { handshake } => BitTorrentHandlerEvent::HandshakeRes {
             handshake,
             user_data,
         },

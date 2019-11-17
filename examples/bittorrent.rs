@@ -35,9 +35,9 @@ use libp2p_bittorrent_protocol::behavior::InterestOk;
 use libp2p_bittorrent_protocol::disk::NativeFileSystem;
 use libp2p_bittorrent_protocol::peer::TorrentState;
 use libp2p_bittorrent_protocol::{
-    Bittorrent,
-    BittorrentConfig,
-    BittorrentEvent,
+    BitTorrent,
+    BitTorrentConfig,
+    BitTorrentEvent,
     MetaInfo,
     TorrentBuilder,
     TorrentSeed,
@@ -58,12 +58,12 @@ fn main() {
     println!("Initialized tmp dir {}", tmp_dir.path().display());
 
     let native_fs = NativeFileSystem::from(tmp_dir.path());
-    let config = BittorrentConfig::default();
-    let behaviour = Bittorrent::with_config(local_peer_id.clone(), native_fs, config);
+    let config = BitTorrentConfig::default();
+    let behaviour = BitTorrent::with_config(local_peer_id.clone(), native_fs, config);
 
     let mut swarm = Swarm::new(transport, behaviour, local_peer_id);
 
-    // Order Bittorrent to start torrenting from a peer.
+    // Order BitTorrent to start torrenting from a peer.
     if let Some(addr) = env::args().nth(1) {
         let peer_id = env::args().nth(2).expect("Demo torrent required.");
         let peer_id: PeerId = peer_id.parse().expect("Failed to parse peer ID to find");
@@ -129,7 +129,7 @@ fn main() {
     // Start torrenting
     tokio::run(futures::future::poll_fn(move || loop {
         match swarm.poll().expect("Error while polling swarm") {
-            Async::Ready(Some(BittorrentEvent::TorrentAddedResult(res))) => match res {
+            Async::Ready(Some(BitTorrentEvent::TorrentAddedResult(res))) => match res {
                 Ok(ok) => {
                     println!("Added new Seed: {:?}", ok);
                 }
@@ -137,7 +137,7 @@ fn main() {
                     println!("Failed to add new seed: {:?}", err);
                 }
             },
-            Async::Ready(Some(BittorrentEvent::HandshakeResult(res))) => match res {
+            Async::Ready(Some(BitTorrentEvent::HandshakeResult(res))) => match res {
                 Ok(ok) => {
                     println!("Handshake ok: {:?}", ok);
                 }
@@ -145,7 +145,7 @@ fn main() {
                     println!("Failed to handshake: {:?}", err);
                 }
             },
-            Async::Ready(Some(BittorrentEvent::InterestResult(res))) => match res {
+            Async::Ready(Some(BitTorrentEvent::InterestResult(res))) => match res {
                 Ok(InterestOk::Interested(peer)) => {
                     swarm.unchoke_peer(&peer);
                     println!("interested: {:?}", peer);
@@ -157,7 +157,7 @@ fn main() {
                     println!("interest error: {:?}", err);
                 }
             },
-            Async::Ready(Some(BittorrentEvent::BitfieldResult(res))) => match res {
+            Async::Ready(Some(BitTorrentEvent::BitfieldResult(res))) => match res {
                 Ok(ok) => {
                     println!("bitfield ok: {:?}", ok);
                 }
@@ -165,7 +165,7 @@ fn main() {
                     println!("bitfield error: {:?}", err);
                 }
             },
-            Async::Ready(Some(BittorrentEvent::ChokeResult(res))) => match res {
+            Async::Ready(Some(BitTorrentEvent::ChokeResult(res))) => match res {
                 Ok(ok) => {
                     println!("choke ok: {:?}", ok);
                 }
@@ -173,7 +173,7 @@ fn main() {
                     println!("choke error: {:?}", err);
                 }
             },
-            Async::Ready(Some(BittorrentEvent::HaveResult(res))) => match res {
+            Async::Ready(Some(BitTorrentEvent::HaveResult(res))) => match res {
                 Ok(ok) => {
                     println!("have ok: {:?}", ok);
                 }
@@ -181,7 +181,7 @@ fn main() {
                     println!("have error: {:?}", err);
                 }
             },
-            Async::Ready(Some(BittorrentEvent::TorrentFinished(torrent))) => {
+            Async::Ready(Some(BitTorrentEvent::TorrentFinished(torrent))) => {
                 println!("Torrent finished {:?}", torrent);
             }
             Async::Ready(Some(_)) => {}
