@@ -430,7 +430,8 @@ where
                 request_id,
             } => {
                 // a peer requested the bitfield
-                if let Some(index_field) = self.torrents.get_bitfield(&peer_id) {
+                if let Some(index_field) = self.torrents.on_bitfield_request(&peer_id, index_field)
+                {
                     debug!("received good bitfield request");
                     self.queued_events
                         .push_back(NetworkBehaviourAction::SendEvent {
@@ -599,7 +600,7 @@ where
                     ))
             }
             BittorrentHandlerEvent::Have { index } => {
-                if let Some(valid_piece) = self.torrents.on_have(&peer_id, index as usize) {
+                if let Some(valid_piece) = self.torrents.on_remote_have(&peer_id, index as usize) {
                     if valid_piece {
                         self.queued_events
                             .push_back(NetworkBehaviourAction::GenerateEvent(

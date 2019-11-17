@@ -453,7 +453,7 @@ impl<TInner> TorrentPool<TInner> {
     /// Update the peer's bitfield.
     /// If the peer was not found a `None` value is returned, otherwise if the
     /// `piece_index` was in bounds.
-    pub fn on_have(&mut self, peer_id: &PeerId, piece_index: usize) -> Option<bool> {
+    pub fn on_remote_have(&mut self, peer_id: &PeerId, piece_index: usize) -> Option<bool> {
         for torrent in self.torrents.values_mut() {
             if let Some(bit) = torrent.on_remote_have(peer_id, piece_index) {
                 return Some(bit);
@@ -483,9 +483,14 @@ impl<TInner> TorrentPool<TInner> {
     /// Returns the bitfield for the torrent the peer is currently tracked on
     ///
     /// A `None` should result in dropping the connection
-    pub fn get_bitfield(&self, peer_id: &PeerId) -> Option<BitField> {
-        for torrent in self.torrents.values() {
-            if torrent.piece_handler.peers.contains_key(peer_id) {
+    pub fn on_bitfield_request(
+        &mut self,
+        peer_id: &PeerId,
+        bitfield: BitField,
+    ) -> Option<BitField> {
+        for torrent in self.torrents.values_mut() {
+            if let Some(peer) = torrent.piece_handler.get_peer_mut(peer_id) {
+                peer.set_bitfield(bitfield);
                 return Some(torrent.piece_handler.bitfield().clone());
             }
         }
@@ -667,15 +672,23 @@ impl<TInner> Torrent<TInner> {
         }
         match self.piece_handler.poll() {
             TorrentPieceHandlerState::WaitingPeers => TorrentPoolState::Waiting(self),
-            TorrentPieceHandlerState::Ready(block) => {
+            TorrentPieceHandlerState::LeechBlock(block) => {
                 if let Some(block) = block {
                     TorrentPoolState::NextBlock(block)
                 } else {
                     TorrentPoolState::Waiting(self)
                 }
             }
-            TorrentPieceHandlerState::Finished(res) => {
+            TorrentPieceHandlerState::PieceFinished(res) => {
                 TorrentPoolState::PieceReady(res.map(|x| (self.id(), x)))
+            }
+            TorrentPieceHandlerState::CompleteSeed => {
+                if self.seed_leech.is_leeching() {
+                    self.seed_leech = SeedLeechConfig::SeedOnly;
+                    TorrentPoolState::Finished(self.id())
+                } else {
+                    TorrentPoolState::Idle
+                }
             }
         }
     }

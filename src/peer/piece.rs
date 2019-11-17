@@ -22,9 +22,11 @@ pub enum TorrentPieceHandlerState {
     /// Wait until the state of a peer changes.
     WaitingPeers,
     /// Start a new block to leech.
-    Ready(Option<NextBlock>),
+    LeechBlock(Option<NextBlock>),
     /// A new piece is ready.
-    Finished(Result<Block, TorrentError>),
+    PieceFinished(Result<Block, TorrentError>),
+    /// Every piece is available
+    CompleteSeed,
 }
 
 /// Tracks the state of a single torrent with all their remotes
@@ -135,8 +137,7 @@ impl TorrentPieceHandler {
         interest: InterestType,
     ) -> Option<InterestType> {
         if let Some(peer) = self.peers.get_mut(peer_id) {
-            let old = Some(std::mem::replace(&mut peer.remote_interest, interest));
-            old
+            Some(std::mem::replace(&mut peer.remote_interest, interest))
         } else {
             None
         }
@@ -233,18 +234,22 @@ impl TorrentPieceHandler {
                     }
                     Err(e) => Err(e),
                 };
-                return TorrentPieceHandlerState::Finished(block);
+                return TorrentPieceHandlerState::PieceFinished(block);
             } else {
                 let next_block = buffer.next();
                 self.piece_buffer = Some(buffer);
-                return TorrentPieceHandlerState::Ready(next_block);
+                return TorrentPieceHandlerState::LeechBlock(next_block);
             }
+        }
+
+        if self.bitfield.all() {
+            return TorrentPieceHandlerState::CompleteSeed;
         }
 
         if let Some(mut buffer) = self.next_piece_buffer() {
             let next_block = buffer.next();
             self.piece_buffer = Some(buffer);
-            TorrentPieceHandlerState::Ready(next_block)
+            TorrentPieceHandlerState::LeechBlock(next_block)
         } else {
             TorrentPieceHandlerState::WaitingPeers
         }
