@@ -16,7 +16,7 @@ pub struct TorrentConfig {
 
 impl TorrentConfig {
     pub fn new_leech(torrent: &MetaInfo, state: TorrentState) -> Self {
-        TorrentBuilder::default()
+        TorrentConfigBuilder::default()
             .info_hash(torrent.info_hash.clone())
             .bitfield(BitField::new_all_clear(torrent.info.pieces.len()))
             .state(state)
@@ -27,7 +27,7 @@ impl TorrentConfig {
     }
 
     pub fn new_seed(torrent: &MetaInfo, state: TorrentState) -> Self {
-        TorrentBuilder::default()
+        TorrentConfigBuilder::default()
             .info_hash(torrent.info_hash.clone())
             .bitfield(BitField::new_all_set(torrent.info.pieces.len()))
             .state(state)
@@ -39,7 +39,7 @@ impl TorrentConfig {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct TorrentBuilder {
+pub struct TorrentConfigBuilder {
     state: Option<TorrentState>,
     bitfield: Option<BitField>,
     info_hash: Option<ShaHash>,
@@ -47,7 +47,7 @@ pub struct TorrentBuilder {
     last_piece_length: Option<u64>,
 }
 
-impl TorrentBuilder {
+impl TorrentConfigBuilder {
     pub fn state(mut self, state: TorrentState) -> Self {
         self.state = Some(state);
         self

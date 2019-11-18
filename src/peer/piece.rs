@@ -336,12 +336,12 @@ impl TorrentPieceHandler {
         let mut rnd = rand::thread_rng();
         missing.shuffle(&mut rnd);
 
-        for piece in missing {
+        for piece_index in missing {
             let peers: Option<Vec<_>> = self
                 .peers
                 .iter()
                 .map(|(id, peer)| {
-                    if peer.remote_can_seed_piece(piece) {
+                    if peer.remote_can_seed_piece(piece_index) {
                         Some(id.clone())
                     } else {
                         None
@@ -351,8 +351,8 @@ impl TorrentPieceHandler {
 
             if let Some(peers) = peers {
                 return Some(PieceBuffer::new(
-                    piece as u64,
-                    self.piece_length,
+                    piece_index as u64,
+                    self.piece_length(piece_index),
                     self.id,
                     peers,
                 ));
@@ -550,11 +550,11 @@ impl PieceBuffer {
 
     /// Create a new buffer with the `NextPiece` message.
     fn new(piece_index: u64, piece_length: u64, torrent_id: TorrentId, peers: Vec<PeerId>) -> Self {
-        let total_blocks = piece_length / PieceBuffer::BLOCK_SIZE;
+        let num_full_blocks = piece_length / PieceBuffer::BLOCK_SIZE;
         let mut last_block_size = piece_length % PieceBuffer::BLOCK_SIZE;
 
-        let mut missing_blocks = (0..total_blocks).fold(
-            Vec::with_capacity(total_blocks as usize),
+        let mut missing_blocks = (0..num_full_blocks).fold(
+            Vec::with_capacity(num_full_blocks as usize),
             |mut blocks, index| {
                 blocks.push(BlockMetadata::new(
                     piece_index,
@@ -565,9 +565,7 @@ impl PieceBuffer {
             },
         );
 
-        if last_block_size == 0 {
-            last_block_size = PieceBuffer::BLOCK_SIZE;
-        } else {
+        if last_block_size > 0 {
             missing_blocks.push(BlockMetadata::new(
                 piece_index,
                 piece_length - last_block_size,
@@ -578,12 +576,12 @@ impl PieceBuffer {
         Self {
             torrent_id,
             pending_blocks: HashMap::with_capacity(peers.len()),
+            total_blocks: missing_blocks.len() as u64,
             missing_blocks,
             piece_index,
             blocks: Default::default(),
             piece_length,
             peers,
-            total_blocks,
             last_block_size,
         }
     }
