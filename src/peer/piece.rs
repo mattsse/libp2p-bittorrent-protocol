@@ -27,6 +27,8 @@ pub enum TorrentPieceHandlerState {
     PieceFinished(Result<Block, TorrentError>),
     /// Every piece is available
     CompleteSeed,
+    /// Torrent is now in endgame mode, the last
+    Endgame,
 }
 
 /// Tracks the state of a single torrent with all their remotes
@@ -375,12 +377,12 @@ impl TorrentPieceHandler {
 
         let mut rarest_peers: Option<Vec<&PeerId>> = None;
         let mut rarest_piece = 0;
-        for piece in missing {
+        for piece_index in missing {
             let peers: Option<Vec<_>> = self
                 .peers
                 .iter()
                 .map(|(id, peer)| {
-                    if peer.remote_can_seed_piece(piece) {
+                    if peer.remote_can_seed_piece(piece_index) {
                         Some(id)
                     } else {
                         None
@@ -391,19 +393,19 @@ impl TorrentPieceHandler {
             if let Some(peers) = peers {
                 if peers.len() == 1 {
                     return Some(PieceBuffer::new(
-                        piece as u64,
-                        self.piece_length,
+                        piece_index as u64,
+                        self.piece_length(piece_index),
                         self.id,
                         peers.into_iter().cloned().collect(),
                     ));
                 }
                 if let Some(rare_peer) = &rarest_peers {
                     if peers.len() < rare_peer.len() {
-                        rarest_piece = piece;
+                        rarest_piece = piece_index;
                         rarest_peers = Some(peers)
                     }
                 } else {
-                    rarest_piece = piece;
+                    rarest_piece = piece_index;
                     rarest_peers = Some(peers)
                 }
             }
@@ -412,7 +414,7 @@ impl TorrentPieceHandler {
         rarest_peers.map(|peers| {
             PieceBuffer::new(
                 rarest_piece as u64,
-                self.piece_length,
+                self.piece_length(rarest_piece),
                 self.id,
                 peers.into_iter().cloned().collect(),
             )
@@ -424,6 +426,14 @@ impl TorrentPieceHandler {
         match self.selection_strategy {
             PieceSelection::Random => self.next_random_piece(),
             PieceSelection::Rarest => self.next_least_common_piece(),
+        }
+    }
+
+    fn piece_length(&self, piece_index: usize) -> u64 {
+        if piece_index == self.bitfield.len() - 1 {
+            self.last_piece_length
+        } else {
+            self.piece_length
         }
     }
 }

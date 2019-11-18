@@ -622,6 +622,7 @@ impl Torrent {
                     TorrentPoolState::Idle
                 }
             }
+            TorrentPieceHandlerState::Endgame => unimplemented!(),
         }
     }
 
