@@ -291,46 +291,6 @@ impl TorrentInfo {
         (self.content.length() % self.piece_length) as usize
     }
 
-    /// returns all files that are related to a piece
-    // TODO create
-    pub fn files_for_piece_index(
-        &self,
-        piece_index: u64,
-    ) -> Result<(&ShaHash, Vec<Cow<SubFileInfo>>), TorrentError> {
-        if (piece_index as usize) < self.pieces.len() {
-            match &self.content {
-                InfoContent::Single { length } => {
-                    return Ok((
-                        &self.pieces[piece_index as usize],
-                        vec![Cow::Owned(SubFileInfo {
-                            length: *length,
-                            paths: vec![self.name.clone()],
-                        })],
-                    ));
-                }
-                InfoContent::Multi { files } => {
-                    let piece_start = self.piece_length * piece_index;
-                    let (piece_start, piece_end) = (piece_start, piece_start + self.piece_length);
-
-                    let mut piece_files = Vec::new();
-
-                    let mut length = 0;
-                    for file in files {
-                        length += file.length;
-                        if length >= piece_end {
-                            piece_files.push(Cow::Borrowed(file));
-                            return Ok((&self.pieces[piece_index as usize], piece_files));
-                        }
-                        if length >= piece_start {
-                            piece_files.push(Cow::Borrowed(file));
-                        }
-                    }
-                }
-            };
-        }
-        Err(TorrentError::BadPiece { index: piece_index })
-    }
-
     /// all files contained in this torrent
     pub fn all_files(&self) -> Vec<PathBuf> {
         if let InfoContent::Multi { files } = &self.content {

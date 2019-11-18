@@ -19,6 +19,7 @@ use crate::util::ShaHash;
 use crate::bitfield::BitField;
 use crate::disk::block::{Block, BlockMetadata};
 use crate::disk::message::DiskMessageOut;
+use crate::peer::builder::TorrentConfig;
 use crate::peer::piece::PieceBuffer;
 use crate::peer::torrent::TorrentState;
 use crate::peer::{BttPeer, ChokeType, InterestType};
@@ -47,7 +48,7 @@ where
     /// The filesystem storage.
     disk_manager: DiskManager<TFileSystem>,
     /// The currently active piece operations.
-    torrents: TorrentPool<TorrentInner>,
+    torrents: TorrentPool,
     /// The currently connected peers.
     connected_peers: FnvHashSet<PeerId>,
     /// Queued events to return when the behaviour is being polled.
@@ -177,15 +178,12 @@ where
     }
 
     /// Add a new torrent to leech from peers
-    pub fn add_leech(&mut self, leech: MetaInfo, state: TorrentState) {
-        let bitfield = BitField::new_all_clear(leech.info.pieces.len());
-        match self.torrents.add_leech(
-            leech.info_hash.clone(),
-            bitfield,
-            leech.info.piece_length,
-            Default::default(),
-            state,
-        ) {
+    pub fn add_leech(&mut self, torrent: MetaInfo, state: TorrentState) {
+        let bitfield = BitField::new_all_clear(torrent.info.pieces.len());
+        match self
+            .torrents
+            .add_torrent(TorrentConfig::new_leech(&torrent, state))
+        {
             Ok((id, actual_state)) => {
                 self.queued_events
                     .push_back(NetworkBehaviourAction::GenerateEvent(
@@ -194,42 +192,25 @@ where
                             state: actual_state,
                         })),
                     ));
-                self.disk_manager.add_torrent(id, leech)
+                self.disk_manager.add_torrent(id, torrent)
             }
             Err(info_hash) => self
                 .queued_events
                 .push_back(NetworkBehaviourAction::GenerateEvent(
                     BitTorrentEvent::TorrentAddedResult(Err(TorrentAddedErr::AlreadyExist {
                         info_hash,
-                        meta_info: leech,
+                        meta_info: torrent,
                     })),
                 )),
         }
     }
 
-    pub fn try_start_new_seed(&mut self, seed: TorrentSeed) {
-        //        let bitfield =
-        // BitField::new_all_set(seed.torrent.info.pieces.len());
-        //
-        //        let id = self.torrents.try_start_new_seed(
-        //            seed.torrent.info_hash.clone(),
-        //            bitfield,
-        //            seed.torrent.info.piece_length,
-        //            Default::default(),
-        //        );
-        //        self.disk_manager.add_torrent(id, )
-    }
-
     /// Add a new torrent as seed .
     pub fn add_seed(&mut self, seed: TorrentSeed, state: TorrentState) {
-        let bitfield = BitField::new_all_set(seed.torrent.info.pieces.len());
-        match self.torrents.add_seed(
-            seed.torrent.info_hash.clone(),
-            bitfield,
-            seed.torrent.info.piece_length,
-            Default::default(),
-            state,
-        ) {
+        match self
+            .torrents
+            .add_torrent(TorrentConfig::new_seed(&seed.torrent, state))
+        {
             Ok((id, actual_state)) => {
                 self.queued_events
                     .push_back(NetworkBehaviourAction::GenerateEvent(
@@ -1010,13 +991,3 @@ impl Default for SeedLeechConfig {
         SeedLeechConfig::SeedAndLeech
     }
 }
-
-/// Internal piece state
-#[derive(Debug, Clone, Default)]
-struct TorrentInner {
-    /// The piece-specific state.
-    info: TorrentInfo,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct TorrentInfo {}

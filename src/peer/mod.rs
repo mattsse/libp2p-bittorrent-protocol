@@ -6,6 +6,7 @@ pub use torrent::TorrentState;
 
 use crate::bitfield::BitField;
 
+pub mod builder;
 pub mod piece;
 pub mod torrent;
 

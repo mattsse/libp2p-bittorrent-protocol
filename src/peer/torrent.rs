@@ -28,6 +28,7 @@ use crate::disk::block::{Block, BlockMetadata, BlockMut};
 use crate::disk::error::TorrentError;
 use crate::disk::message::DiskMessageIn;
 use crate::handler::BitTorrentRequestId;
+use crate::peer::builder::TorrentConfig;
 use crate::peer::piece::{NextBlock, TorrentPieceHandler, TorrentPieceHandlerState};
 use crate::peer::{BttPeer, ChokeType, InterestType};
 use crate::piece::{Piece, PieceSelection};
@@ -35,13 +36,10 @@ use crate::proto::message::{Handshake, PeerRequest};
 
 /// A `TorrentPool` provides an aggregate state machine for driving the
 /// Torrent#s `Piece`s to completion.
-///
-/// Internally, a `TorrentInner` is in turn driven by an underlying
-/// `TorrentPeerIter` that determines the peer selection strategy.
-pub struct TorrentPool<TInner> {
+pub struct TorrentPool {
     pub local_peer_hash: ShaHash,
     pub local_peer_id: PeerId,
-    torrents: FnvHashMap<TorrentId, Torrent<TInner>>,
+    torrents: FnvHashMap<TorrentId, Torrent>,
     /// The timeout after we choke a peer
     peer_timeout: Duration,
     /// Cannot be higher than the active torrents
@@ -57,11 +55,11 @@ pub struct TorrentPool<TInner> {
 }
 
 /// The observable states emitted by [`TorrentPool::poll`].
-pub enum TorrentPoolState<'a, TInner> {
+pub enum TorrentPoolState<'a> {
     /// The pool is idle, i.e. there are no torrents to process.
     Idle,
     /// At least one torrent is waiting to generate requests.
-    Waiting(&'a mut Torrent<TInner>),
+    Waiting(&'a mut Torrent),
     /// A leeched piece is ready to process
     PieceReady(Result<(TorrentId, Block), TorrentError>),
     /// A torrent is finished and remains in the pool for seeding.
@@ -74,7 +72,7 @@ pub enum TorrentPoolState<'a, TInner> {
     NextBlock(NextBlock),
 }
 
-impl<TInner> TorrentPool<TInner> {
+impl TorrentPool {
     /// Create a new pool for the `config`.
     pub fn new(local_peer_id: PeerId, config: BitTorrentConfig) -> Self {
         let local_peer_hash = config.peer_hash.unwrap_or_else(|| ShaHash::random());
@@ -97,110 +95,49 @@ impl<TInner> TorrentPool<TInner> {
         }
     }
 
-    fn add_torrent<T: Into<ShaHash>>(
+    pub fn add_torrent<T: Into<TorrentConfig>>(
         &mut self,
-        info_hash: T,
-        bitfield: BitField,
-        piece_length: u64,
-        inner: TInner,
-        state: TorrentState,
-        seed_leech: SeedLeechConfig,
+        torrent: T,
     ) -> Result<(TorrentId, TorrentState), ShaHash> {
-        let info_hash = info_hash.into();
+        let torrent = torrent.into();
 
-        if self.torrents.values().any(|x| x.info_hash == info_hash) {
-            return Err(info_hash);
+        if self
+            .torrents
+            .values()
+            .any(|x| x.info_hash == torrent.info_hash)
+        {
+            return Err(torrent.info_hash);
         }
 
-        let state = if state.is_active() {
+        let state = if torrent.state.is_active() {
             if self.iter_active().count() < self.max_active_torrents {
                 TorrentState::Active
             } else {
                 TorrentState::Paused
             }
         } else {
-            state
+            torrent.state
         };
 
         let id = TorrentId(self.next_unique_torrent);
         self.next_unique_torrent += 1;
+
         let torrent = Torrent::new(
             id,
-            info_hash,
+            torrent.info_hash,
             TorrentPieceHandler::new(
                 id,
                 self.initial_piece_selection_strategy,
-                bitfield,
-                piece_length,
+                torrent.bitfield,
+                torrent.piece_length,
+                torrent.last_piece_length,
             ),
-            inner,
-            seed_leech,
-            state,
+            torrent.seed_leech,
+            torrent.state,
         );
 
         self.torrents.insert(id, torrent);
         Ok((id, state))
-    }
-
-    /// Creates a new `Torrent` with a new id in
-    /// [`SeedLeechConfig::SeedAndLeech`] mode.
-    pub fn add_leech<T: Into<ShaHash>>(
-        &mut self,
-        info_hash: T,
-        bitfield: BitField,
-        piece_length: u64,
-        inner: TInner,
-        state: TorrentState,
-    ) -> Result<(TorrentId, TorrentState), ShaHash> {
-        self.add_torrent(
-            info_hash,
-            bitfield,
-            piece_length,
-            inner,
-            state,
-            SeedLeechConfig::SeedAndLeech,
-        )
-    }
-
-    pub fn try_start_new_seed<T: Into<ShaHash>>(
-        &mut self,
-        info_hash: T,
-        bitfield: BitField,
-        piece_length: u64,
-        inner: TInner,
-    ) -> Result<Result<TorrentId, TorrentId>, ShaHash> {
-        let (id, state) = self.add_seed(
-            info_hash,
-            bitfield,
-            piece_length,
-            inner,
-            TorrentState::Active,
-        )?;
-        if state.is_active() {
-            Ok(Ok(id))
-        } else {
-            Ok(Err(id))
-        }
-    }
-
-    /// Creates a new `Torrent` with a new id in [`SeedLeechConfig::SeedOnly`]
-    /// mode.
-    pub fn add_seed<T: Into<ShaHash>>(
-        &mut self,
-        info_hash: T,
-        bitfield: BitField,
-        piece_length: u64,
-        inner: TInner,
-        state: TorrentState,
-    ) -> Result<(TorrentId, TorrentState), ShaHash> {
-        self.add_torrent(
-            info_hash,
-            bitfield,
-            piece_length,
-            inner,
-            state,
-            SeedLeechConfig::SeedOnly,
-        )
     }
 
     pub fn unchoke_remote(&mut self, peer_id: &PeerId) -> Result<TorrentId, ()> {
@@ -226,11 +163,11 @@ impl<TInner> TorrentPool<TInner> {
         Err(())
     }
 
-    fn iter_active(&self) -> impl Iterator<Item = &Torrent<TInner>> {
+    fn iter_active(&self) -> impl Iterator<Item = &Torrent> {
         self.torrents.values().filter(|x| x.is_active())
     }
 
-    fn iter_active_mut(&mut self) -> impl Iterator<Item = &mut Torrent<TInner>> {
+    fn iter_active_mut(&mut self) -> impl Iterator<Item = &mut Torrent> {
         self.torrents.values_mut().filter(|x| x.is_active())
     }
 
@@ -260,7 +197,7 @@ impl<TInner> TorrentPool<TInner> {
     }
 
     /// The torrent that matches the hash
-    pub fn get_for_info_hash(&self, info_hash: &ShaHash) -> Option<&Torrent<TInner>> {
+    pub fn get_for_info_hash(&self, info_hash: &ShaHash) -> Option<&Torrent> {
         self.torrents
             .values()
             .filter(|x| x.info_hash == *info_hash)
@@ -268,7 +205,7 @@ impl<TInner> TorrentPool<TInner> {
     }
 
     /// The torrent that matches the hash
-    pub fn get_for_info_hash_mut(&mut self, info_hash: &ShaHash) -> Option<&mut Torrent<TInner>> {
+    pub fn get_for_info_hash_mut(&mut self, info_hash: &ShaHash) -> Option<&mut Torrent> {
         self.torrents
             .values_mut()
             .filter(|x| x.info_hash == *info_hash)
@@ -511,12 +448,12 @@ impl<TInner> TorrentPool<TInner> {
     }
 
     /// Returns an iterator over the torrents in the pool.
-    pub fn iter(&self) -> impl Iterator<Item = &Torrent<TInner>> {
+    pub fn iter(&self) -> impl Iterator<Item = &Torrent> {
         self.torrents.values()
     }
 
     /// Returns an iterator over mutable torrents in the pool.
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Torrent<TInner>> {
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Torrent> {
         self.torrents.values_mut()
     }
 
@@ -543,12 +480,12 @@ impl<TInner> TorrentPool<TInner> {
 
     /// Returns a reference to a torrent with the given ID, if it is in the
     /// pool.
-    pub fn get(&self, id: &TorrentId) -> Option<&Torrent<TInner>> {
+    pub fn get(&self, id: &TorrentId) -> Option<&Torrent> {
         self.torrents.get(id)
     }
 
     /// Returns all torrents in leeching state
-    pub fn iter_leeching(&self) -> impl Iterator<Item = &Torrent<TInner>> {
+    pub fn iter_leeching(&self) -> impl Iterator<Item = &Torrent> {
         self.torrents
             .values()
             .filter(|torrent| torrent.seed_leech != SeedLeechConfig::SeedOnly)
@@ -559,7 +496,7 @@ impl<TInner> TorrentPool<TInner> {
     }
 
     /// Returns all torrents we are seeding.
-    pub fn iter_seeding(&self) -> impl Iterator<Item = &Torrent<TInner>> {
+    pub fn iter_seeding(&self) -> impl Iterator<Item = &Torrent> {
         self.torrents
             .values()
             .filter(|torrent| torrent.seed_leech != SeedLeechConfig::LeechOnly)
@@ -570,7 +507,7 @@ impl<TInner> TorrentPool<TInner> {
     }
 
     /// Returns all torrents we own completely.
-    pub fn iter_complete_seeds(&self) -> impl Iterator<Item = &Torrent<TInner>> {
+    pub fn iter_complete_seeds(&self) -> impl Iterator<Item = &Torrent> {
         self.torrents
             .values()
             .filter(|torrent| torrent.seed_leech == SeedLeechConfig::SeedOnly)
@@ -578,11 +515,11 @@ impl<TInner> TorrentPool<TInner> {
 
     /// Returns a mutablereference to a torrent with the given ID, if it is in
     /// the pool.
-    pub fn get_mut(&mut self, id: &TorrentId) -> Option<&mut Torrent<TInner>> {
+    pub fn get_mut(&mut self, id: &TorrentId) -> Option<&mut Torrent> {
         self.torrents.get_mut(id)
     }
 
-    pub fn poll(&mut self, now: Instant) -> TorrentPoolState<TInner> {
+    pub fn poll(&mut self, now: Instant) -> TorrentPoolState {
         for torrent in self.iter_active_mut() {
             match torrent.poll(now) {
                 TorrentPoolState::Idle => continue,
@@ -595,7 +532,7 @@ impl<TInner> TorrentPool<TInner> {
 }
 
 /// a Torrent in a `TorrentPool`
-pub struct Torrent<TInner> {
+pub struct Torrent {
     /// The unique ID of the Torrent.
     id: TorrentId,
     /// the info hash of the torrent file, this is how torrents are identified
@@ -604,21 +541,17 @@ pub struct Torrent<TInner> {
     piece_handler: TorrentPieceHandler,
     /// The instant when the torrent was created.
     created: Instant,
-    /// The opaque inner state.
-    pub inner: TInner,
     /// The state of how the torrent should send/receive blocks
     seed_leech: SeedLeechConfig,
     /// State of torrent's capability to download/upload
     state: TorrentState,
 }
 
-impl<TInner> Torrent<TInner> {
-    // TODO add Builder
+impl Torrent {
     pub fn new(
         id: TorrentId,
         info_hash: ShaHash,
         piece_handler: TorrentPieceHandler,
-        inner: TInner,
         seed_leech: SeedLeechConfig,
         state: TorrentState,
     ) -> Self {
@@ -627,7 +560,6 @@ impl<TInner> Torrent<TInner> {
             info_hash,
             piece_handler,
             created: Instant::now(),
-            inner,
             seed_leech,
             state,
         }
@@ -659,7 +591,7 @@ impl<TInner> Torrent<TInner> {
         self.piece_handler.bitfield()
     }
 
-    pub fn poll(&mut self, now: Instant) -> TorrentPoolState<TInner> {
+    pub fn poll(&mut self, now: Instant) -> TorrentPoolState {
         for (id, peer) in &mut self.piece_handler.peers {
             // TODO only consider active peers
             if peer.is_client_timeout(now) {

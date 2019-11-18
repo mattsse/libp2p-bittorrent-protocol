@@ -43,6 +43,8 @@ pub struct TorrentPieceHandler {
     bitfield: BitField,
     /// length for a piece in the torrent
     piece_length: u64,
+    /// the length of the last piece that might by truncated at the end
+    last_piece_length: u64,
     /// All the peers related to the torrent.
     pub peers: FnvHashMap<PeerId, BttPeer>,
     /// Whether client is in endgame mode
@@ -55,6 +57,7 @@ impl TorrentPieceHandler {
         selection_strategy: PieceSelection,
         bitfield: BitField,
         piece_length: u64,
+        last_piece_length: u64,
     ) -> Self {
         Self {
             id,
@@ -63,6 +66,7 @@ impl TorrentPieceHandler {
             pending_seed_blocks: Default::default(),
             bitfield,
             piece_length,
+            last_piece_length,
             peers: Default::default(),
             endgame: false,
         }
