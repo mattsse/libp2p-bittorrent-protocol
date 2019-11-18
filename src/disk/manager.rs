@@ -217,7 +217,7 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                             // adjust blocks
                             let fragment =
                                 Bytes::from(&block[fragemt_offset..window.length as usize]);
-                            fragemt_offset + window.length as usize;
+                            fragemt_offset += window.length as usize;
                             blocks.push(BlockFileWrite::new(file, fragment, window));
                         }
                         let block = BlockJob::Write(BlockWrite::Overlap {
