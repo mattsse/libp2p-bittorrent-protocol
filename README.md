@@ -1,8 +1,10 @@
-libp2p-bittorrent-protocol
+libp2p-bittorrent
 =====================
+[![Build Status](https://travis-ci.com/mattsse/libp2p-bittorrent.svg?branch=master)](https://travis-ci.com/mattsse/libp2p-bittorrent)
+[![Crates.io](https://img.shields.io/crates/v/libp2p-bittorrent.svg)](https://crates.io/crates/libp2p-bittorrent)
+[![Documentation](https://docs.rs/libp2p-bittorrent/badge.svg)](https://docs.rs/libp2p-bittorrent)
 
-
-WIP implementation of the [bittorrent data exchange protocol](http://www.bittorrent.org/beps/bep_0003.html) as a rust-libp2p-protocol.
+A libp2p specific implementation of the [bittorrent data exchange protocol](http://www.bittorrent.org/beps/bep_0003.html).
 
 ## License
 
