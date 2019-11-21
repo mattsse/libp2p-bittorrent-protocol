@@ -40,7 +40,7 @@ impl BitTorrentProtocolConfig {
 impl Default for BitTorrentProtocolConfig {
     fn default() -> Self {
         BitTorrentProtocolConfig {
-            protocol_name: Cow::Borrowed(b"/btt/1.0.0"),
+            protocol_name: Cow::Borrowed(b"/bittorrent/1.0.0"),
         }
     }
 }
