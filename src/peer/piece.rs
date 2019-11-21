@@ -13,7 +13,7 @@ use crate::disk::block::{Block, BlockMetadata, BlockMut};
 use crate::disk::error::TorrentError;
 use crate::handler::BitTorrentRequestId;
 use crate::peer::torrent::TorrentId;
-use crate::peer::{BttPeer, ChokeType, InterestType};
+use crate::peer::{BitTorrentPeer, ChokeType, InterestType};
 use crate::piece::PieceSelection;
 
 /// Tracks the progress of the handler
@@ -25,10 +25,12 @@ pub enum TorrentPieceHandlerState {
     LeechBlock(Option<NextBlock>),
     /// A new piece is ready.
     PieceFinished(Result<Block, TorrentError>),
-    /// Every piece is available
-    CompleteSeed,
+    /// The last missing piece was successfully downloaded.
+    Finished,
     /// Torrent is now in endgame mode, the last
     Endgame,
+    /// Nothing to leech. Every piece is available.
+    Seed,
 }
 
 /// Tracks the state of a single torrent with all their remotes
@@ -48,9 +50,11 @@ pub struct TorrentPieceHandler {
     /// the length of the last piece that might by truncated at the end
     last_piece_length: u64,
     /// All the peers related to the torrent.
-    pub peers: FnvHashMap<PeerId, BttPeer>,
+    pub peers: FnvHashMap<PeerId, BitTorrentPeer>,
     /// Whether client is in endgame mode
     endgame: bool,
+    /// Every piece is available.
+    finished: bool,
 }
 
 impl TorrentPieceHandler {
@@ -61,6 +65,7 @@ impl TorrentPieceHandler {
         piece_length: u64,
         last_piece_length: u64,
     ) -> Self {
+        let finished = bitfield.all();
         Self {
             id,
             selection_strategy,
@@ -71,11 +76,12 @@ impl TorrentPieceHandler {
             last_piece_length,
             peers: Default::default(),
             endgame: false,
+            finished,
         }
     }
 
     /// Add a new peer for the torrent.
-    pub fn insert_peer(&mut self, id: PeerId, peer: BttPeer) -> Option<BttPeer> {
+    pub fn insert_peer(&mut self, id: PeerId, peer: BitTorrentPeer) -> Option<BitTorrentPeer> {
         if let Some(buffer) = &mut self.piece_buffer {
             if peer.remote_can_seed_piece(buffer.piece_index as usize) {
                 // consider adding to the current buffer
@@ -84,7 +90,6 @@ impl TorrentPieceHandler {
                 }
             }
         }
-
         self.peers.insert(id.clone(), peer)
     }
 
@@ -154,7 +159,7 @@ impl TorrentPieceHandler {
         self.bitfield.get(piece_index).unwrap_or_default()
     }
 
-    pub fn remove_peer(&mut self, id: &PeerId) -> Option<BttPeer> {
+    pub fn remove_peer(&mut self, id: &PeerId) -> Option<BitTorrentPeer> {
         let peer = self.peers.remove(id);
         if peer.is_some() {
             if let Some(buffer) = &mut self.piece_buffer {
@@ -179,16 +184,16 @@ impl TorrentPieceHandler {
     }
 
     /// Returns the `BttPeer` that's tracked with the `PeerId`
-    pub fn get_peer(&self, id: &PeerId) -> Option<&BttPeer> {
+    pub fn get_peer(&self, id: &PeerId) -> Option<&BitTorrentPeer> {
         self.peers.get(id)
     }
 
-    pub fn get_peer_mut(&mut self, id: &PeerId) -> Option<&mut BttPeer> {
+    pub fn get_peer_mut(&mut self, id: &PeerId) -> Option<&mut BitTorrentPeer> {
         self.peers.get_mut(id)
     }
 
-    /// Untrack current piece
-    pub fn timeout_buffer(&mut self) -> Option<PieceBuffer> {
+    /// Untrack current piece buffer
+    pub fn clear_buffer(&mut self) -> Option<PieceBuffer> {
         self.piece_buffer.take()
     }
 
@@ -210,8 +215,8 @@ impl TorrentPieceHandler {
     }
 
     /// removes the first peer and the requestid the peer is currently waiting
-    /// for the block
-    pub fn remove_pending_seed(
+    /// for seeding a block
+    pub fn clear_pending_seed_block(
         &mut self,
         block: &BlockMetadata,
     ) -> Option<(PeerId, BitTorrentRequestId)> {
@@ -235,7 +240,7 @@ impl TorrentPieceHandler {
             if buffer.is_full_piece() {
                 let block = match buffer.try_finalize_piece() {
                     Ok(block) => {
-                        self.add_piece(block.metadata().piece_index as usize);
+                        self.set_piece(block.metadata().piece_index as usize);
                         Ok(block)
                     }
                     Err(e) => Err(e),
@@ -248,8 +253,13 @@ impl TorrentPieceHandler {
             }
         }
 
+        if self.finished {
+            return TorrentPieceHandlerState::Seed;
+        }
+
         if self.bitfield.all() {
-            return TorrentPieceHandlerState::CompleteSeed;
+            self.finished = true;
+            return TorrentPieceHandlerState::Finished;
         }
 
         if let Some(mut buffer) = self.next_piece_buffer() {
@@ -266,7 +276,7 @@ impl TorrentPieceHandler {
     /// If no `BttPeer` is currently tracked for the `peer_id` a `None` value is
     /// returned otherwise whether the `piece_index` was in bounds of the peer's
     /// bitfield.
-    pub fn add_peer_piece(&mut self, peer_id: &PeerId, piece_index: usize) -> Option<bool> {
+    pub fn set_peer_piece(&mut self, peer_id: &PeerId, piece_index: usize) -> Option<bool> {
         if let Some(peer) = self.peers.get_mut(peer_id) {
             if peer.has_bitfield() {
                 peer.add_piece(piece_index)
@@ -289,7 +299,7 @@ impl TorrentPieceHandler {
     /// Set the piece at the index to owned.
     ///
     /// If the piece_index is out of bounds a error value is returned.
-    pub fn add_piece(&mut self, piece_index: usize) -> Result<(), ()> {
+    pub fn set_piece(&mut self, piece_index: usize) -> Result<(), ()> {
         if piece_index < self.bitfield.len() {
             self.bitfield.set(piece_index, true);
             Ok(())
@@ -301,7 +311,7 @@ impl TorrentPieceHandler {
     /// Set the piece at the index to missing.
     ///
     /// If the piece_index is out of bounds a error value is returned.
-    pub fn remove_piece(&mut self, piece_index: usize) -> Result<(), ()> {
+    pub fn clear_piece(&mut self, piece_index: usize) -> Result<(), ()> {
         if piece_index < self.bitfield.len() {
             self.bitfield.set(piece_index, false);
             Ok(())
@@ -310,6 +320,9 @@ impl TorrentPieceHandler {
         }
     }
 
+    /// Add a new `Block` to the buffer
+    ///
+    /// Only if the block was requested from the peer
     pub fn add_block(&mut self, peer: &PeerId, block: Block) -> Result<BlockMetadata, BlockErr> {
         if let Some(buffer) = &mut self.piece_buffer {
             return buffer.add_block(peer, block);
@@ -322,10 +335,11 @@ impl TorrentPieceHandler {
 
     /// All piece indices that are still missing
     fn missing_piece_indices(&self) -> Vec<usize> {
+        let current_piece = self.piece_buffer.as_ref().map(|x| x.piece_index as usize);
         self.bitfield
             .iter()
             .enumerate()
-            .filter(|(index, bit)| !*bit)
+            .filter(|(index, bit)| !*bit && Some(index) != current_piece.as_ref())
             .map(|(index, _)| index)
             .collect()
     }
@@ -365,7 +379,7 @@ impl TorrentPieceHandler {
     fn next_least_common_piece(&self) -> Option<PieceBuffer> {
         let mut missing = self.missing_piece_indices();
 
-        if !self.peers.values().any(BttPeer::remote_can_seed) {
+        if !self.peers.values().any(BitTorrentPeer::remote_can_seed) {
             // no peers have the client unchoked with bitfields available
             return None;
         }
@@ -483,20 +497,23 @@ impl PieceBuffer {
         None
     }
 
-    pub fn remove_peer(&mut self, id: &PeerId) -> Option<PeerId> {
-        let pos = self.peers.iter().position(|x| *x == *id);
+    /// Don't consider the peer for future requests.
+    ///
+    /// Any pending response will be discarded.
+    pub fn remove_peer(&mut self, peer: &PeerId) -> Option<PeerId> {
+        let pos = self.peers.iter().position(|x| *x == *peer);
         if let Some(pos) = pos {
             return Some(self.peers.remove(pos));
         }
         // check pending blocks
-        if let Some((peer, block)) = self.pending_blocks.remove_entry(id) {
+        if let Some((peer, block)) = self.pending_blocks.remove_entry(peer) {
             self.missing_blocks.push(block);
             return Some(peer);
         }
         None
     }
 
-    /// Whether all the buffer owns the right amount of blocks
+    /// Whether the piece buffer owns the right amount of blocks.
     #[inline]
     pub fn is_full_piece(&self) -> bool {
         self.blocks.len() == self.total_blocks as usize
@@ -507,14 +524,16 @@ impl PieceBuffer {
     /// If the `block`s metadata could not be validated, the block is returned
     pub fn add_block(&mut self, peer: &PeerId, block: Block) -> Result<BlockMetadata, BlockErr> {
         if let Some((id, expected)) = self.pending_blocks.remove_entry(peer) {
-            // validate block
+            // check if block was requested
             if block.metadata() == expected {
                 self.blocks.insert(block.metadata().block_offset, block);
+                // track the peer as ready to leech from again
                 self.peers.push(id);
                 Ok(expected)
             } else {
                 self.missing_blocks.push(expected);
                 self.peers.push(id);
+                // peer sent the wrong block
                 Err(BlockErr::InvalidBlock {
                     peer: peer.clone(),
                     expected: expected.clone(),
@@ -551,6 +570,7 @@ impl PieceBuffer {
     /// Create a new buffer with the `NextPiece` message.
     fn new(piece_index: u64, piece_length: u64, torrent_id: TorrentId, peers: Vec<PeerId>) -> Self {
         let num_full_blocks = piece_length / PieceBuffer::BLOCK_SIZE;
+        // last block might be truncated
         let mut last_block_size = piece_length % PieceBuffer::BLOCK_SIZE;
 
         let mut missing_blocks = (0..num_full_blocks).fold(

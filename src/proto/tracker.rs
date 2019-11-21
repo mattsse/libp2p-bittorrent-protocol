@@ -9,7 +9,7 @@ use wasm_timer::Instant;
 use crate::util::ShaHash;
 
 // TODO use a struct that is compliant with the tracker spec
-use crate::peer::BttPeer;
+use crate::peer::BitTorrentPeer;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub enum EventType {
@@ -22,7 +22,7 @@ pub enum EventType {
 pub struct TrackerRequestMsg {
     pub info_hash: ShaHash,
 
-    pub peer: BttPeer,
+    pub peer: BitTorrentPeer,
 
     pub uploaded: u64,
 
@@ -50,7 +50,7 @@ pub enum TrackerResponseMsg {
         /// Minimum announce interval
         min_interval: Option<Duration>,
         /// matching peers
-        peers: Vec<BttPeer>,
+        peers: Vec<BitTorrentPeer>,
     },
 }
 

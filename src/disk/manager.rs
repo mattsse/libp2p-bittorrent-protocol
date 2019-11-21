@@ -84,6 +84,8 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
         }
     }
 
+    fn move_torrent(&mut self, id: TorrentId, dir: PathBuf) {}
+
     /// stores a new torrent
     pub fn add_torrent(&mut self, id: TorrentId, meta: MetaInfo) {
         self.queued_events
@@ -306,7 +308,7 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                         .insert(file.id, FileState::Ready(file.inner));
                 }
                 match result {
-                    Ok(block) => DiskMessageOut::BlockWritten(torrent, block),
+                    Ok(block) => DiskMessageOut::PieceWritten(torrent, block),
                     Err(metadata) => DiskMessageOut::WriteBlockError(
                         torrent,
                         TorrentError::BadPiece {
@@ -389,6 +391,7 @@ impl<TFileSystem: FileSystem> Future for DiskManager<TFileSystem> {
                                 return Ok(Async::NotReady);
                             }
                         }
+                        DiskMessageIn::MoveTorrent(id, dir) => self.move_torrent(id, dir),
                     }
                 } else {
                     break;

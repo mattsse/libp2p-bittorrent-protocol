@@ -22,7 +22,7 @@ use crate::disk::message::DiskMessageOut;
 use crate::peer::builder::TorrentConfig;
 use crate::peer::piece::PieceBuffer;
 use crate::peer::torrent::TorrentState;
-use crate::peer::{BttPeer, ChokeType, InterestType};
+use crate::peer::{BitTorrentPeer, ChokeType, InterestType};
 use crate::proto::message::{Handshake, PeerMessage, PeerRequest};
 use crate::{
     disk::error::TorrentError,
@@ -650,7 +650,7 @@ where
                                 self.disk_manager.write_block(torrent_id, piece)
                             }
                             Err(e) => {
-                                // TODO reset torrent handler
+                                // TODO reset torrent piece handler
                             }
                         }
                     }
@@ -690,8 +690,12 @@ where
                 match self.disk_manager.poll() {
                     Ok(Async::Ready(event)) => {
                         match event {
-                            DiskMessageOut::TorrentAdded(_) => {}
-                            DiskMessageOut::TorrentRemoved(_, _) => {}
+                            DiskMessageOut::TorrentAdded(_) => {
+                                continue;
+                            }
+                            DiskMessageOut::TorrentRemoved(_, _) => {
+                                continue;
+                            }
                             DiskMessageOut::TorrentSynced(id) => {
                                 self.queued_events.push_back(
                                     NetworkBehaviourAction::GenerateEvent(
@@ -724,9 +728,14 @@ where
                                     );
                                 }
                             }
-                            DiskMessageOut::BlockWritten(torrent_id, block) => {
-                                if let Some(torrent) = self.torrents.get(&torrent_id) {
+                            DiskMessageOut::PieceWritten(torrent_id, block) => {
+                                if let Some(torrent) = self.torrents.get_mut(&torrent_id) {
                                     let index = block.metadata().piece_index as u32;
+
+                                    // acknowledge that the piece is written
+                                    torrent.set_piece(block.metadata().piece_index as usize);
+
+                                    // send a new Have message to all peers of this torrent
                                     for peer in torrent.iter_peer_ids() {
                                         self.queued_events.push_back(
                                             NetworkBehaviourAction::SendEvent {
@@ -737,7 +746,10 @@ where
                                     }
                                 }
                             }
-                            DiskMessageOut::TorrentError(_, _) => {}
+                            DiskMessageOut::TorrentError(id, err) => {
+                                // error occurred while adding removing the
+                                // torrent
+                            }
                             DiskMessageOut::ReadBlockError(id, err) => {
                                 debug!("encountered error while reading block {:?}", err);
                                 return Async::Ready(NetworkBehaviourAction::GenerateEvent(
@@ -750,16 +762,17 @@ where
                                 debug!("encountered error while writing block {:?}", err);
                                 // TODO err handling
                             }
+                            DiskMessageOut::MovedTorrent(id, dest) => {
+                                debug!("Moved torrent {:?} to {}", id, dest.display());
+                            }
                         }
                     }
                     Err(err) => {
-                        debug!("diskmanager error");
                         return Async::Ready(NetworkBehaviourAction::GenerateEvent(
                             BitTorrentEvent::DiskResult(Err(())),
                         ));
                     }
                     Ok(Async::NotReady) => {
-                        debug!("Diskmanager not ready.");
                         break;
                     }
                 };
@@ -797,6 +810,24 @@ pub type HandshakeResult = Result<HandshakeOk, HandshakeError>;
 
 /// The result of a diskmanager task
 pub type DiskResult = Result<DiskMessageOut, ()>;
+
+#[derive(Debug, Clone)]
+pub enum DiskOk {
+    ReadBlock {
+        torrent: TorrentId,
+        block: BlockMetadata,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum DiskError {
+    PieceHashMismatch {
+        torrent: TorrentId,
+        piece_index: u64,
+        expected: ShaHash,
+        got: ShaHash,
+    },
+}
 
 /// The successful result of [`BitTorrent::handshake`].
 #[derive(Debug, Clone)]

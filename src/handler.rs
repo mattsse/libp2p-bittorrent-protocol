@@ -25,7 +25,7 @@ use crate::bitfield::BitField;
 use crate::disk::torrent::TorrentSeed;
 use crate::error;
 use crate::peer::torrent::{Torrent, TorrentId, TorrentPeer};
-use crate::peer::{BttPeer, ChokeType, InterestType};
+use crate::peer::{BitTorrentPeer, ChokeType, InterestType};
 use crate::piece::Piece;
 use crate::proto::message::{Handshake, PeerMessage, PeerRequest};
 use crate::proto::{BitTorrentProtocolConfig, BttStreamSink};

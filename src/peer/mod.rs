@@ -44,11 +44,11 @@ impl Default for InterestType {
 
 /// connection start out as chocked and not interested
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BttPeer {
+pub struct BitTorrentPeer {
     //    /// Identifier of the peer.
     //    pub node_id: PeerId,
     /// The peer's bittorrent id
-    pub peer_btt_id: ShaHash,
+    pub bittorrent_id: ShaHash,
     /// What pieces this peers owns or lacks
     pub bitfield: Option<BitField>,
     /// History of send/receive statistics
@@ -67,11 +67,11 @@ pub struct BttPeer {
     pub client_heartbeat: Instant,
 }
 
-impl BttPeer {
+impl BitTorrentPeer {
     pub fn new<T: Into<ShaHash>>(peer_btt_id: T) -> Self {
         Self {
             bitfield: None,
-            peer_btt_id: peer_btt_id.into(),
+            bittorrent_id: peer_btt_id.into(),
             stats: Default::default(),
             remote_choke: Default::default(),
             remote_interest: Default::default(),
@@ -85,7 +85,7 @@ impl BttPeer {
     pub fn new_with_bitfield<T: Into<ShaHash>>(peer_btt_id: T, piece_field: BitField) -> Self {
         Self {
             bitfield: Some(piece_field),
-            peer_btt_id: peer_btt_id.into(),
+            bittorrent_id: peer_btt_id.into(),
             stats: Default::default(),
             remote_choke: Default::default(),
             remote_interest: Default::default(),

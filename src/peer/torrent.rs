@@ -30,7 +30,7 @@ use crate::disk::message::DiskMessageIn;
 use crate::handler::BitTorrentRequestId;
 use crate::peer::builder::TorrentConfig;
 use crate::peer::piece::{NextBlock, TorrentPieceHandler, TorrentPieceHandlerState};
-use crate::peer::{BttPeer, ChokeType, InterestType};
+use crate::peer::{BitTorrentPeer, ChokeType, InterestType};
 use crate::piece::{Piece, PieceSelection};
 use crate::proto::message::{Handshake, PeerRequest};
 
@@ -236,7 +236,7 @@ impl TorrentPool {
             return Err(HandshakeError::InvalidPeer(peer_id, None));
         }
         if let Some(torrent) = self.get_for_info_hash_mut(&handshake.info_hash) {
-            let peer = BttPeer::new(handshake.peer_id);
+            let peer = BitTorrentPeer::new(handshake.peer_id);
             // begin tracking the peer
             torrent.piece_handler.insert_peer(peer_id, peer);
             return Ok(Handshake::new(handshake.info_hash, self.local_peer_hash));
@@ -257,7 +257,7 @@ impl TorrentPool {
     ) -> Result<(HandshakeOk, BitField), HandshakeError> {
         if let Some(torrent) = self.torrents.get_mut(&torrent_id) {
             if torrent.info_hash == handshake.info_hash {
-                let peer = BttPeer::new(handshake.peer_id);
+                let peer = BitTorrentPeer::new(handshake.peer_id);
                 torrent.piece_handler.insert_peer(peer_id.clone(), peer);
                 return Ok((HandshakeOk(peer_id), torrent.bitfield().clone()));
             }
@@ -378,7 +378,7 @@ impl TorrentPool {
         block: &BlockMetadata,
     ) -> Option<(PeerId, BitTorrentRequestId)> {
         if let Some(torrent) = self.torrents.get_mut(&torrent_id) {
-            if let Some((peer, id)) = torrent.piece_handler.remove_pending_seed(block) {
+            if let Some((peer, id)) = torrent.piece_handler.clear_pending_seed_block(block) {
                 return Some((peer, id));
             }
         }
@@ -438,7 +438,7 @@ impl TorrentPool {
     ///
     /// This is valid since only a single connection per torrent and peer is
     /// allowed
-    pub fn remove_peer(&mut self, peer_id: &PeerId) -> Option<BttPeer> {
+    pub fn remove_peer(&mut self, peer_id: &PeerId) -> Option<BitTorrentPeer> {
         for torrent in self.torrents.values_mut() {
             if let Some(peer) = torrent.remove_peer(peer_id) {
                 return Some(peer);
@@ -461,7 +461,7 @@ impl TorrentPool {
     pub fn iter_candidate_peers<'a>(
         &'a self,
         info_hash: &'a ShaHash,
-    ) -> impl Iterator<Item = &'a BttPeer> + 'a {
+    ) -> impl Iterator<Item = &'a BitTorrentPeer> + 'a {
         self.torrents
             .values()
             .filter(move |torrent| torrent.info_hash != *info_hash)
@@ -574,16 +574,21 @@ impl Torrent {
         self.piece_handler.peers.keys()
     }
 
-    pub fn iter_peers(&self) -> impl Iterator<Item = &BttPeer> {
+    pub fn iter_peers(&self) -> impl Iterator<Item = &BitTorrentPeer> {
         self.piece_handler.peers.values()
     }
 
-    pub fn remove_peer(&mut self, peer_id: &PeerId) -> Option<BttPeer> {
+    pub fn remove_peer(&mut self, peer_id: &PeerId) -> Option<BitTorrentPeer> {
         self.piece_handler.remove_peer(peer_id)
     }
 
     pub fn add_block(&mut self, peer_id: &PeerId, block: Block) -> Result<BlockMetadata, BlockErr> {
         self.piece_handler.add_block(peer_id, block)
+    }
+
+    /// Set the state of the piece to owned.
+    pub fn set_piece(&mut self, piece_index: usize) -> Result<(), ()> {
+        self.piece_handler.set_piece(piece_index)
     }
 
     /// The bitfield of the client.
@@ -592,8 +597,8 @@ impl Torrent {
     }
 
     pub fn poll(&mut self, now: Instant) -> TorrentPoolState {
+        // check heartbeats
         for (id, peer) in &mut self.piece_handler.peers {
-            // TODO only consider active peers
             if peer.is_client_timeout(now) {
                 peer.client_heartbeat = Instant::now();
                 return TorrentPoolState::KeepAlive(self.id, id.clone());
@@ -602,6 +607,7 @@ impl Torrent {
                 return TorrentPoolState::Timeout(self.id, id.clone());
             }
         }
+
         match self.piece_handler.poll() {
             TorrentPieceHandlerState::WaitingPeers => TorrentPoolState::Waiting(self),
             TorrentPieceHandlerState::LeechBlock(block) => {
@@ -614,15 +620,14 @@ impl Torrent {
             TorrentPieceHandlerState::PieceFinished(res) => {
                 TorrentPoolState::PieceReady(res.map(|x| (self.id(), x)))
             }
-            TorrentPieceHandlerState::CompleteSeed => {
-                if self.seed_leech.is_leeching() {
-                    self.seed_leech = SeedLeechConfig::SeedOnly;
-                    TorrentPoolState::Finished(self.id())
-                } else {
-                    TorrentPoolState::Idle
-                }
+            TorrentPieceHandlerState::Finished => {
+                self.seed_leech = SeedLeechConfig::SeedOnly;
+                TorrentPoolState::Finished(self.id())
             }
-            TorrentPieceHandlerState::Endgame => unimplemented!(),
+            TorrentPieceHandlerState::Endgame => {
+                unimplemented!("end game mode is not implemented yet")
+            }
+            TorrentPieceHandlerState::Seed => TorrentPoolState::Idle,
         }
     }
 

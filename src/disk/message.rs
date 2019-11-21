@@ -4,8 +4,7 @@ use crate::disk::block::{Block, BlockMetadata, BlockMut};
 use crate::disk::error::TorrentError;
 use crate::peer::torrent::TorrentId;
 use crate::torrent::MetaInfo;
-
-// TODO add messages for moving finished files
+use std::path::PathBuf;
 
 /// Messages that can be sent to the `DiskManager`.
 #[derive(Debug)]
@@ -18,6 +17,8 @@ pub enum DiskMessageIn {
     /// and as an added convenience, this message will also trigger
     /// a `IDiskMessage::SyncTorrent` message.
     RemoveTorrent(TorrentId),
+    /// Message to move a torrent to another destination.
+    MoveTorrent(TorrentId, PathBuf),
     /// Message to tell the `FileSystem` to sync the torrent.
     ///
     /// This message will trigger a call to `FileSystem::sync` for every
@@ -42,12 +43,15 @@ pub enum DiskMessageOut {
     TorrentAdded(TorrentId),
     /// Message indicating that the torrent has been removed.
     TorrentRemoved(TorrentId, MetaInfo),
+    /// Message indicating that the torrent has beed moved to another
+    /// destination.
+    MovedTorrent(TorrentId, PathBuf),
     /// Message indicating that the torrent has been synced.
     TorrentSynced(TorrentId),
     /// Message indicating that the given block has been successfully loaded.
     BlockRead(TorrentId, BlockMut),
     /// Message indicating that the given block has been successfully processed.
-    BlockWritten(TorrentId, Block),
+    PieceWritten(TorrentId, Block),
     /// Error occurring from a `AddTorrent` or `RemoveTorrent` message.
     TorrentError(TorrentId, TorrentError),
     /// Error occurring from a `ReadBlock` message.
