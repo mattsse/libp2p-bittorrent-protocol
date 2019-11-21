@@ -1,10 +1,10 @@
 use libp2p_core::PeerId;
 use wasm_timer::Instant;
 
-use crate::util::ShaHash;
 pub use torrent::TorrentState;
 
 use crate::bitfield::BitField;
+use crate::util::ShaHash;
 
 pub mod builder;
 pub mod piece;

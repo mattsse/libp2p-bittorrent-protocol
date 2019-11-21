@@ -3,11 +3,10 @@ use std::path::PathBuf;
 
 use snafu::Snafu;
 
-use crate::util::ShaHash;
-
 use crate::disk::block::BlockMetadata;
 use crate::peer::torrent::TorrentId;
 use crate::torrent::MetaInfo;
+use crate::util::ShaHash;
 
 #[derive(Debug, Snafu)]
 pub enum TorrentError {

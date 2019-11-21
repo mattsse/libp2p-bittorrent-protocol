@@ -1,10 +1,10 @@
-use crate::util::ShaHash;
+use std::path::PathBuf;
 
 use crate::disk::block::{Block, BlockMetadata, BlockMut};
 use crate::disk::error::TorrentError;
 use crate::peer::torrent::TorrentId;
 use crate::torrent::MetaInfo;
-use std::path::PathBuf;
+use crate::util::ShaHash;
 
 /// Messages that can be sent to the `DiskManager`.
 #[derive(Debug)]

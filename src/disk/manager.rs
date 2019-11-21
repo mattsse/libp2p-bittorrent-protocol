@@ -1,17 +1,17 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io;
 use std::io::SeekFrom;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
 use bit_vec::BitBlock;
+use bytes::Bytes;
 use fnv::{FnvHashMap, FnvHashSet};
 use futures::future::Either;
 use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
 use lru_cache::LruCache;
 use tokio_fs::file::{OpenFuture, SeekFuture};
 use tokio_fs::OpenOptions;
-
-use crate::util::ShaHash;
 
 use crate::disk::block::{
     Block,
@@ -34,8 +34,7 @@ use crate::disk::native::NativeFileSystem;
 use crate::peer::torrent::TorrentId;
 use crate::piece::PieceState;
 use crate::torrent::MetaInfo;
-use bytes::Bytes;
-use std::ops::Deref;
+use crate::util::ShaHash;
 
 /// `DiskManager` object which handles the storage of `Blocks` to the
 /// `FileSystem`.

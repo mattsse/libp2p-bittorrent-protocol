@@ -1,10 +1,9 @@
+use std::collections::BTreeMap;
 use std::io::SeekFrom;
 use std::ops::{Deref, DerefMut};
 
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::Async;
-
-use crate::util::{ShaHash, SHA_HASH_LEN};
 
 use crate::behavior::BlockOk;
 use crate::disk::error::TorrentError;
@@ -13,7 +12,7 @@ use crate::disk::fs::FileSystem;
 use crate::peer::torrent::TorrentId;
 use crate::piece::Piece;
 use crate::proto::message::PeerRequest;
-use std::collections::BTreeMap;
+use crate::util::{ShaHash, SHA_HASH_LEN};
 
 /// `BlockMetadata` which tracks metadata associated with a `Block` of memory.
 #[derive(Copy, Clone, Hash, PartialEq, Eq, Debug)]

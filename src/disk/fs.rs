@@ -2,10 +2,10 @@ use std::io;
 use std::io::SeekFrom;
 use std::path::Path;
 
+use bytes::BufMut;
 use futures::Async;
 
 use crate::disk::block::{Block, BlockMut};
-use bytes::BufMut;
 
 /// Trait for performing operations on some file system.
 /// Provides the necessary abstractions for handling files

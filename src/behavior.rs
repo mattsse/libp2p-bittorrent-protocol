@@ -5,6 +5,7 @@ use std::collections::{HashSet, VecDeque};
 use std::convert::TryInto;
 use std::marker::PhantomData;
 use std::path::PathBuf;
+use std::ptr::hash;
 
 use fnv::{FnvHashMap, FnvHashSet};
 use futures::{Async, Future};
@@ -14,8 +15,6 @@ use smallvec::SmallVec;
 use tokio_io::{AsyncRead, AsyncWrite};
 use wasm_timer::Instant;
 
-use crate::util::ShaHash;
-
 use crate::bitfield::BitField;
 use crate::disk::block::{Block, BlockMetadata};
 use crate::disk::message::DiskMessageOut;
@@ -24,6 +23,7 @@ use crate::peer::piece::PieceBuffer;
 use crate::peer::torrent::TorrentState;
 use crate::peer::{BitTorrentPeer, ChokeType, InterestType};
 use crate::proto::message::{Handshake, PeerMessage, PeerRequest};
+use crate::util::ShaHash;
 use crate::{
     disk::error::TorrentError,
     disk::fs::FileSystem,
@@ -36,7 +36,6 @@ use crate::{
     piece::PieceSelection,
     torrent::MetaInfo,
 };
-use std::ptr::hash;
 
 // TODO add dht support
 

@@ -8,8 +8,6 @@ use fnv::FnvHashMap;
 use libp2p_core::PeerId;
 use wasm_timer::Instant;
 
-use crate::util::ShaHash;
-
 use crate::behavior::{
     BitTorrentConfig,
     BlockErr,
@@ -33,6 +31,7 @@ use crate::peer::piece::{NextBlock, TorrentPieceHandler, TorrentPieceHandlerStat
 use crate::peer::{BitTorrentPeer, ChokeType, InterestType};
 use crate::piece::{Piece, PieceSelection};
 use crate::proto::message::{Handshake, PeerRequest};
+use crate::util::ShaHash;
 
 /// A `TorrentPool` provides an aggregate state machine for driving the
 /// Torrent#s `Piece`s to completion.
