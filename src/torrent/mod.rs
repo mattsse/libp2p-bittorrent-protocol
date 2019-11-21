@@ -585,6 +585,7 @@ mod tests {
             info_hash,
         };
 
-        let data = torrent.write_torrent_file("dummy.torrent").unwrap();
+        let _ = torrent.write_torrent_file("dummy.torrent").unwrap();
+        std::fs::remove_file("dummy.torrent").unwrap();
     }
 }
