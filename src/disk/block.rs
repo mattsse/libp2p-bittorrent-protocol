@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 use std::io::SeekFrom;
 use std::ops::{Deref, DerefMut};
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use bytes::{BufMut, Bytes, BytesMut};
-use futures::Async;
+use futures::prelude::*;
 
 use crate::behavior::BlockOk;
 use crate::disk::error::TorrentError;
@@ -230,7 +232,7 @@ pub struct BlockFileWrite<TFile> {
     state: BlockState,
 }
 
-impl<TFile> BlockFileWrite<TFile> {
+impl<TFile: Unpin> BlockFileWrite<TFile> {
     pub fn new(file: BlockFile<TFile>, block: Bytes, file_window: FileWindow) -> Self {
         Self {
             file,
@@ -244,47 +246,51 @@ impl<TFile> BlockFileWrite<TFile> {
     pub fn poll<TFileSystem: FileSystem<File = TFile>>(
         &mut self,
         fs: &mut TFileSystem,
-    ) -> Result<Async<()>, TFileSystem::Error> {
+        cx: &mut Context,
+    ) -> Poll<Result<(), TFileSystem::Error>> {
         match self.state {
-            BlockState::Ready => Ok(Async::Ready(())),
+            BlockState::Ready => Poll::Ready(Ok(())),
             BlockState::Seek => {
-                if let Async::Ready(_) = fs.poll_seek(
+                if let Poll::Ready(_) = fs.poll_seek(
                     &mut self.file.inner,
                     SeekFrom::Start(self.file_window.offset),
+                    cx,
                 )? {
-                    if let Async::Ready(written) = fs.poll_write_block(
+                    if let Poll::Ready(written) = fs.poll_write_block(
                         &mut self.file.inner,
                         &self.block[self.written..self.file_window.length as usize],
+                        cx,
                     )? {
                         self.written += written;
                         if self.written < self.file_window.length as usize {
-                            Ok(Async::NotReady)
+                            Poll::Pending
                         } else {
                             self.state = BlockState::Ready;
-                            Ok(Async::Ready(()))
+                            Poll::Ready(Ok(()))
                         }
                     } else {
                         self.state = BlockState::Process;
-                        Ok(Async::NotReady)
+                        Poll::Pending
                     }
                 } else {
-                    Ok(Async::NotReady)
+                    Poll::Pending
                 }
             }
             BlockState::Process => {
-                if let Async::Ready(written) = fs.poll_write_block(
+                if let Poll::Ready(written) = fs.poll_write_block(
                     &mut self.file.inner,
                     &self.block[self.written..self.file_window.length as usize],
+                    cx,
                 )? {
                     self.written += written;
                     if self.written < self.file_window.length as usize {
-                        Ok(Async::NotReady)
+                        Poll::Pending
                     } else {
                         self.state = BlockState::Ready;
-                        Ok(Async::Ready(()))
+                        Poll::Ready(Ok(()))
                     }
                 } else {
-                    Ok(Async::NotReady)
+                    Poll::Pending
                 }
             }
         }
@@ -313,7 +319,7 @@ pub struct BlockFileRead<TFile> {
     state: BlockState,
 }
 
-impl<TFile> BlockFileRead<TFile> {
+impl<TFile: Unpin> BlockFileRead<TFile> {
     pub fn new(file: BlockFile<TFile>, file_window: FileWindow) -> Self {
         Self {
             file,
@@ -327,46 +333,58 @@ impl<TFile> BlockFileRead<TFile> {
     pub fn poll<TFileSystem: FileSystem<File = TFile>>(
         &mut self,
         fs: &mut TFileSystem,
-    ) -> Result<Async<()>, TFileSystem::Error> {
+        cx: &mut Context,
+    ) -> Poll<Result<(), TFileSystem::Error>> {
         match self.state {
-            BlockState::Ready => Ok(Async::Ready(())),
+            BlockState::Ready => Poll::Ready(Ok(())),
             BlockState::Seek => {
                 // TODO adjust offset
-                if let Async::Ready(pos) = fs.poll_seek(
+                if let Poll::Ready(pos) = fs.poll_seek(
                     &mut self.file.inner,
                     SeekFrom::Start(self.file_window.offset),
-                )? {
-                    if let Async::Ready(read) =
-                        fs.poll_read_block(&mut self.file.inner, &mut self.block)?
+                    cx,
+                ) {
+                    if let Poll::Ready(res) =
+                        fs.poll_read_block(&mut self.file.inner, &mut self.block, cx)
                     {
-                        self.read += read;
-                        if self.read < self.file_window.length as usize {
-                            Ok(Async::NotReady)
-                        } else {
-                            self.state = BlockState::Ready;
-                            Ok(Async::Ready(()))
+                        match res {
+                            Ok(read) => {
+                                self.read += read;
+                                if self.read < self.file_window.length as usize {
+                                    Poll::Pending
+                                } else {
+                                    self.state = BlockState::Ready;
+                                    Poll::Ready(Ok(()))
+                                }
+                            }
+                            Err(err) => Poll::Ready(Err(err)),
                         }
                     } else {
                         self.state = BlockState::Process;
-                        Ok(Async::NotReady)
+                        Poll::Pending
                     }
                 } else {
-                    Ok(Async::NotReady)
+                    Poll::Pending
                 }
             }
             BlockState::Process => {
-                if let Async::Ready(read) =
-                    fs.poll_read_block(&mut self.file.inner, &mut self.block)?
+                if let Poll::Ready(res) =
+                    fs.poll_read_block(&mut self.file.inner, &mut self.block, cx)
                 {
-                    self.read += read;
-                    if self.read < self.file_window.length as usize {
-                        Ok(Async::NotReady)
-                    } else {
-                        self.state = BlockState::Ready;
-                        Ok(Async::Ready(()))
+                    match res {
+                        Ok(read) => {
+                            self.read += read;
+                            if self.read < self.file_window.length as usize {
+                                Poll::Pending
+                            } else {
+                                self.state = BlockState::Ready;
+                                Poll::Ready(Ok(()))
+                            }
+                        }
+                        Err(err) => Poll::Ready(Err(err)),
                     }
                 } else {
-                    Ok(Async::NotReady)
+                    Poll::Pending
                 }
             }
         }
@@ -379,42 +397,43 @@ pub enum BlockJob<TFile> {
     Write(BlockWrite<TFile>),
 }
 
-impl<TFile> BlockJob<TFile> {
+impl<TFile: Unpin> BlockJob<TFile> {
     pub fn poll<TFileSystem: FileSystem<File = TFile>>(
         &mut self,
         fs: &mut TFileSystem,
-    ) -> Result<Async<()>, TFileSystem::Error> {
+        cx: &mut Context,
+    ) -> Poll<Result<(), TFileSystem::Error>> {
         match self {
             BlockJob::Read(read) => match read {
-                BlockRead::Single { metadata, block } => block.poll(fs),
+                BlockRead::Single { metadata, block } => block.poll(fs, cx),
                 BlockRead::Overlap { blocks, .. } => {
                     let mut ready = true;
                     for block in blocks {
-                        if block.poll(fs)?.is_not_ready() {
+                        if block.poll(fs, cx).is_pending() {
                             ready = false;
                         }
                     }
                     if ready {
-                        Ok(Async::Ready(()))
+                        Poll::Ready(Ok(()))
                     } else {
-                        Ok(Async::NotReady)
+                        Poll::Pending
                     }
                 }
             },
 
             BlockJob::Write(write) => match write {
-                BlockWrite::Single { metadata, block } => block.poll(fs),
+                BlockWrite::Single { metadata, block } => block.poll(fs, cx),
                 BlockWrite::Overlap { blocks, .. } => {
                     let mut ready = true;
                     for block in blocks {
-                        if block.poll(fs)?.is_not_ready() {
+                        if block.poll(fs, cx).is_pending() {
                             ready = false;
                         }
                     }
                     if ready {
-                        Ok(Async::Ready(()))
+                        Poll::Ready(Ok(()))
                     } else {
-                        Ok(Async::NotReady)
+                        Poll::Pending
                     }
                 }
             },

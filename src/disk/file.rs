@@ -4,10 +4,8 @@ use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
-use futures::{Async, Future};
 use sha1::Sha1;
-use tokio_fs::file::{OpenFuture, SeekFuture};
-use tokio_fs::OpenOptions;
+use tokio::fs::OpenOptions;
 
 use crate::disk::block::{Block, BlockMetadata, BlockMut};
 use crate::disk::error::TorrentError;

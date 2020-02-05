@@ -1,9 +1,8 @@
+use bytes::BufMut;
+use futures::task::{Context, Poll};
 use std::io;
 use std::io::SeekFrom;
 use std::path::Path;
-
-use bytes::BufMut;
-use futures::Async;
 
 use crate::disk::block::{Block, BlockMut};
 
@@ -11,31 +10,36 @@ use crate::disk::block::{Block, BlockMut};
 /// Provides the necessary abstractions for handling files
 pub trait FileSystem {
     /// Some file object.
-    type File;
-    type Error;
+    type File: Unpin;
+    type Error: Unpin + std::fmt::Debug;
 
     /// Open a file, create it if it does not exist.
     ///
     /// Intermediate directories will be created if necessary.
-    fn poll_open_file<P>(&mut self, path: P) -> Result<Async<Self::File>, Self::Error>
+    fn poll_open_file<P>(&self, path: P, cx: &mut Context) -> Poll<Result<Self::File, Self::Error>>
     where
         P: AsRef<Path>;
 
-    /// Sync the file.
-    fn sync_file<P>(&mut self, path: P) -> Result<Async<()>, Self::Error>
-    where
-        P: AsRef<Path> + Send + 'static;
+    /// Attempts to sync all OS-internal metadata to disk.
+    fn sync_file<P>(
+        &mut self,
+        file: &mut Self::File,
+        cx: &mut Context,
+    ) -> Poll<Result<(), Self::Error>>;
 
     /// Get the size of the file in bytes.
-    fn poll_file_size(&self, file: &mut Self::File) -> Result<Async<u64>, Self::Error>;
+    fn poll_file_size(
+        &self,
+        file: &mut Self::File,
+        cx: &mut Context,
+    ) -> Poll<Result<u64, Self::Error>>;
 
-    /// Read the contents of the file at the given offset.
-    ///
-    /// On success, return the number of bytes read.
-    fn read_file(&self, file: &mut Self::File, offset: u64, buffer: &mut [u8])
-        -> io::Result<usize>;
-
-    fn poll_seek(&self, file: &mut Self::File, seek: SeekFrom) -> Result<Async<u64>, Self::Error>;
+    fn poll_seek(
+        &self,
+        file: &mut Self::File,
+        seek: SeekFrom,
+        cx: &mut Context,
+    ) -> Poll<Result<u64, Self::Error>>;
 
     /// Read the contents of the file at the given offset.
     ///
@@ -44,7 +48,8 @@ pub trait FileSystem {
         &self,
         file: &mut Self::File,
         block: &mut B,
-    ) -> Result<Async<usize>, Self::Error>;
+        cx: &mut Context,
+    ) -> Poll<Result<usize, Self::Error>>;
 
     /// Write the contents of the file at the given offset.
     ///
@@ -53,11 +58,6 @@ pub trait FileSystem {
         &self,
         file: &mut Self::File,
         buf: &[u8],
-    ) -> Result<Async<usize>, Self::Error>;
-
-    /// Write the contents of the file at the given offset.
-    ///
-    /// On success, return the number of bytes written. If offset is
-    /// past the current size of the file, zeroes will be filled in.
-    fn write_file(&self, file: &mut Self::File, offset: u64, buffer: &[u8]) -> io::Result<usize>;
+        cx: &mut Context,
+    ) -> Poll<Result<usize, Self::Error>>;
 }

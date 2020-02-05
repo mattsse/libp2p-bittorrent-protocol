@@ -6,13 +6,13 @@ use std::convert::TryInto;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::ptr::hash;
+use std::task::{Context, Poll};
 
 use fnv::{FnvHashMap, FnvHashSet};
-use futures::{Async, Future};
+use futures::prelude::*;
 use libp2p_core::{ConnectedPoint, Multiaddr, PeerId};
 use libp2p_swarm::{NetworkBehaviour, NetworkBehaviourAction, PollParameters, ProtocolsHandler};
 use smallvec::SmallVec;
-use tokio_io::{AsyncRead, AsyncWrite};
 use wasm_timer::Instant;
 
 use crate::bitfield::BitField;
@@ -36,13 +36,14 @@ use crate::{
     piece::PieceSelection,
     torrent::MetaInfo,
 };
+use std::pin::Pin;
 
 // TODO add dht support
 
 /// Network behaviour that handles BitTorrent.
 pub struct BitTorrent<TSubstream, TFileSystem>
 where
-    TFileSystem: FileSystem,
+    TFileSystem: FileSystem + Unpin,
 {
     /// The filesystem storage.
     disk_manager: DiskManager<TFileSystem>,
@@ -63,7 +64,7 @@ where
 
 impl<TSubstream, TFileSystem> BitTorrent<TSubstream, TFileSystem>
 where
-    TFileSystem: FileSystem,
+    TFileSystem: FileSystem + Unpin,
 {
     /// Creates a new `BitTorrent` network behaviour with the given
     /// configuration.
@@ -291,8 +292,8 @@ impl Default for BitTorrentConfig {
 
 impl<TSubstream, TFileSystem> NetworkBehaviour for BitTorrent<TSubstream, TFileSystem>
 where
-    TSubstream: AsyncRead + AsyncWrite,
-    TFileSystem: FileSystem,
+    TSubstream: AsyncRead + AsyncWrite + Unpin,
+    TFileSystem: FileSystem + Unpin,
 {
     type ProtocolsHandler = BitTorrentHandler<TSubstream, TorrentId>;
     type OutEvent = BitTorrentEvent;
@@ -617,8 +618,9 @@ where
     /// send to user or handler
     fn poll(
         &mut self,
+        cx: &mut Context,
         parameters: &mut impl PollParameters,
-    ) -> Async<
+    ) -> Poll<
         NetworkBehaviourAction<
             <Self::ProtocolsHandler as ProtocolsHandler>::InEvent,
             Self::OutEvent,
@@ -628,7 +630,7 @@ where
         loop {
             // Drain queued events.
             if let Some(event) = self.queued_events.pop_front() {
-                return Async::Ready(event);
+                return Poll::Ready(event);
             }
 
             // advance the torrent pool state
@@ -637,7 +639,7 @@ where
                     TorrentPoolState::Idle => break,
                     TorrentPoolState::Timeout(torrent, peer) => {
                         if let Some(event) = self.on_remote_timeout(peer) {
-                            return Async::Ready(NetworkBehaviourAction::GenerateEvent(event));
+                            return Poll::Ready(NetworkBehaviourAction::GenerateEvent(event));
                         }
                     }
                     TorrentPoolState::PieceReady(res) => {
@@ -656,7 +658,7 @@ where
                     TorrentPoolState::KeepAlive(torrent, peer_id) => {
                         debug!("sending keepalive to {:?}", peer_id);
                         // a new keepalive msg needs to be send
-                        return Async::Ready(NetworkBehaviourAction::SendEvent {
+                        return Poll::Ready(NetworkBehaviourAction::SendEvent {
                             peer_id,
                             event: BitTorrentHandlerIn::KeepAlive,
                         });
@@ -667,13 +669,13 @@ where
                     }
                     TorrentPoolState::Finished(torrent_id) => {
                         debug!("torrent complete {:?}", torrent_id);
-                        return Async::Ready(NetworkBehaviourAction::GenerateEvent(
+                        return Poll::Ready(NetworkBehaviourAction::GenerateEvent(
                             BitTorrentEvent::TorrentFinished(torrent_id),
                         ));
                     }
                     TorrentPoolState::NextBlock(block) => {
                         debug!("requesting new block {:?}", block);
-                        return Async::Ready(NetworkBehaviourAction::SendEvent {
+                        return Poll::Ready(NetworkBehaviourAction::SendEvent {
                             peer_id: block.peer_id,
                             event: BitTorrentHandlerIn::GetPieceReq {
                                 user_data: block.torrent_id,
@@ -686,92 +688,95 @@ where
 
             loop {
                 // drain pending disk io
-                match self.disk_manager.poll() {
-                    Ok(Async::Ready(event)) => {
-                        match event {
-                            DiskMessageOut::TorrentAdded(_) => {
-                                continue;
-                            }
-                            DiskMessageOut::TorrentRemoved(_, _) => {
-                                continue;
-                            }
-                            DiskMessageOut::TorrentSynced(id) => {
-                                self.queued_events.push_back(
-                                    NetworkBehaviourAction::GenerateEvent(
-                                        BitTorrentEvent::DiskResult(Ok(
-                                            DiskMessageOut::TorrentSynced(id),
-                                        )),
-                                    ),
-                                );
-                            }
-                            DiskMessageOut::BlockRead(torrent, block) => {
-                                debug!("disk manager read: {:?}", block.metadata());
-
-                                if let Some((peer_id, request_id)) =
-                                    self.torrents.on_block_read(torrent, &block.metadata())
-                                {
+                match DiskManager::poll(Pin::new(&mut self.disk_manager), cx) {
+                    Poll::Ready(output) => {
+                        match output {
+                            Ok(event) => match event {
+                                DiskMessageOut::TorrentAdded(_) => {
+                                    continue;
+                                }
+                                DiskMessageOut::TorrentRemoved(_, _) => {
+                                    continue;
+                                }
+                                DiskMessageOut::TorrentSynced(id) => {
                                     self.queued_events.push_back(
-                                        NetworkBehaviourAction::SendEvent {
-                                            peer_id,
-                                            event: BitTorrentHandlerIn::GetPieceRes {
-                                                piece: block.into_piece(),
-                                                request_id,
-                                            },
-                                        },
-                                    );
-                                } else {
-                                    // TODO error handling
-                                    debug!(
-                                        "Failed to match read block to peer {:?}",
-                                        block.metadata()
+                                        NetworkBehaviourAction::GenerateEvent(
+                                            BitTorrentEvent::DiskResult(Ok(
+                                                DiskMessageOut::TorrentSynced(id),
+                                            )),
+                                        ),
                                     );
                                 }
-                            }
-                            DiskMessageOut::PieceWritten(torrent_id, block) => {
-                                if let Some(torrent) = self.torrents.get_mut(&torrent_id) {
-                                    let index = block.metadata().piece_index as u32;
+                                DiskMessageOut::BlockRead(torrent, block) => {
+                                    debug!("disk manager read block: {:?}", block.metadata());
 
-                                    // acknowledge that the piece is written
-                                    torrent.set_piece(block.metadata().piece_index as usize);
-
-                                    // send a new Have message to all peers of this torrent
-                                    for peer in torrent.iter_peer_ids() {
+                                    if let Some((peer_id, request_id)) =
+                                        self.torrents.on_block_read(torrent, &block.metadata())
+                                    {
                                         self.queued_events.push_back(
                                             NetworkBehaviourAction::SendEvent {
-                                                peer_id: peer.clone(),
-                                                event: BitTorrentHandlerIn::Have { index },
+                                                peer_id,
+                                                event: BitTorrentHandlerIn::GetPieceRes {
+                                                    piece: block.into_piece(),
+                                                    request_id,
+                                                },
                                             },
+                                        );
+                                    } else {
+                                        // TODO error handling
+                                        debug!(
+                                            "Failed to match read block to peer {:?}",
+                                            block.metadata()
                                         );
                                     }
                                 }
-                            }
-                            DiskMessageOut::TorrentError(id, err) => {
-                                // error occurred while adding removing the
-                                // torrent
-                            }
-                            DiskMessageOut::ReadBlockError(id, err) => {
-                                debug!("encountered error while reading block {:?}", err);
-                                return Async::Ready(NetworkBehaviourAction::GenerateEvent(
-                                    BitTorrentEvent::DiskResult(Ok(
-                                        DiskMessageOut::ReadBlockError(id, err),
-                                    )),
+                                DiskMessageOut::PieceWritten(torrent_id, block) => {
+                                    if let Some(torrent) = self.torrents.get_mut(&torrent_id) {
+                                        let index = block.metadata().piece_index as u32;
+
+                                        // acknowledge that the piece is written
+                                        torrent.set_piece(block.metadata().piece_index as usize);
+
+                                        // send a new Have message to all peers of this torrent
+                                        for peer in torrent.iter_peer_ids() {
+                                            self.queued_events.push_back(
+                                                NetworkBehaviourAction::SendEvent {
+                                                    peer_id: peer.clone(),
+                                                    event: BitTorrentHandlerIn::Have { index },
+                                                },
+                                            );
+                                        }
+                                    }
+                                }
+                                DiskMessageOut::TorrentError(id, err) => {
+                                    // error occurred while adding removing the
+                                    // torrent
+                                }
+                                DiskMessageOut::ReadBlockError(id, err) => {
+                                    debug!("encountered error while reading block {:?}", err);
+                                    return Poll::Ready(NetworkBehaviourAction::GenerateEvent(
+                                        BitTorrentEvent::DiskResult(Ok(
+                                            DiskMessageOut::ReadBlockError(id, err),
+                                        )),
+                                    ));
+                                }
+                                DiskMessageOut::WriteBlockError(id, err) => {
+                                    debug!("encountered error while writing block {:?}", err);
+                                    // TODO err handling
+                                }
+                                DiskMessageOut::MovedTorrent(id, dest) => {
+                                    debug!("Moved torrent {:?} to {}", id, dest.display());
+                                }
+                            },
+                            Err(err) => {
+                                error!("Disk Error {:?}", err);
+                                return Poll::Ready(NetworkBehaviourAction::GenerateEvent(
+                                    BitTorrentEvent::DiskResult(Err(())),
                                 ));
-                            }
-                            DiskMessageOut::WriteBlockError(id, err) => {
-                                debug!("encountered error while writing block {:?}", err);
-                                // TODO err handling
-                            }
-                            DiskMessageOut::MovedTorrent(id, dest) => {
-                                debug!("Moved torrent {:?} to {}", id, dest.display());
                             }
                         }
                     }
-                    Err(err) => {
-                        return Async::Ready(NetworkBehaviourAction::GenerateEvent(
-                            BitTorrentEvent::DiskResult(Err(())),
-                        ));
-                    }
-                    Ok(Async::NotReady) => {
+                    Poll::Pending => {
                         break;
                     }
                 };
@@ -781,7 +786,7 @@ where
             // If no new events have been queued either, signal `NotReady` to
             // be polled again later.
             if self.queued_events.is_empty() {
-                return Async::NotReady;
+                return Poll::Pending;
             }
         }
     }

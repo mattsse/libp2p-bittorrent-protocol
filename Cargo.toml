@@ -1,8 +1,10 @@
 [package]
 name = "libp2p-bittorrent"
 version = "0.1.0"
+description = "BitTorrent protocol for libp2p"
 edition = "2018"
-authors = ["matthiasseitz <matthias.seitz@tum.de>"]
+authors = ["Matthias Seitz <matthias.seitz@tum.de>"]
+license = "MIT"
 keywords = ["peer-to-peer", "libp2p", "networking"]
 categories = ["network-programming", "asynchronous"]
 
@@ -10,13 +12,14 @@ categories = ["network-programming", "asynchronous"]
 bendy = "0.2"
 bit-vec = "0.6"
 byteorder = "1.3"
-bytes = "0.4"
+bytes = "0.5"
 chrono = "0.4"
 env_logger = "0.7"
-futures = "0.1"
+futures_codec = "0.3.4"
+futures = "0.3.1"
 fnv = "1.0"
-libp2p-core = "0.13"
-libp2p-swarm = "0.3"
+libp2p-core = "0.15"
+libp2p-swarm = "0.5"
 log = "0.4"
 lru-cache = "0.1"
 rand = "0.7.2"
@@ -24,18 +27,15 @@ sha1 = "0.6.0"
 sha2 = "0.8.0"
 smallvec = "0.6"
 snafu = "0.5"
-tokio-codec = "0.1"
-tokio-io = "0.1"
-tokio-fs = "0.1"
 walkdir = "2.2"
-wasm-timer = "0.1"
-
+wasm-timer = "0.2"
+tokio = { version = "0.2", features = ["fs", "io-util"] }
 
 [features]
 
 [dev-dependencies]
-tokio = "0.1"
-libp2p-tcp = "0.13"
-libp2p = "0.13"
-libp2p-kad = "0.13"
-tempfile = "3.1.0"
+tokio = { version = "0.2", features = ["full"] }
+libp2p-tcp = "0.15"
+libp2p = "0.15"
+libp2p-kad = "0.15"
+tempfile = "3.1"

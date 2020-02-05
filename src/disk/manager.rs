@@ -1,17 +1,18 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io;
 use std::io::SeekFrom;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use bit_vec::BitBlock;
 use bytes::Bytes;
 use fnv::{FnvHashMap, FnvHashSet};
 use futures::future::Either;
-use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
+use futures::prelude::*;
 use lru_cache::LruCache;
-use tokio_fs::file::{OpenFuture, SeekFuture};
-use tokio_fs::OpenOptions;
+use tokio::fs::OpenOptions;
 
 use crate::disk::block::{
     Block,
@@ -31,6 +32,7 @@ use crate::disk::file::{FileEntry, FileWindow, TorrentFile, TorrentFileId};
 use crate::disk::fs::FileSystem;
 use crate::disk::message::{DiskMessageIn, DiskMessageOut};
 use crate::disk::native::NativeFileSystem;
+use crate::handler::BitTorrentHandlerEvent::TorrentErr;
 use crate::peer::torrent::TorrentId;
 use crate::piece::PieceState;
 use crate::torrent::MetaInfo;
@@ -107,10 +109,8 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
         &mut self,
         id: TorrentId,
         meta: BlockMetadata,
-    ) -> Result<
-        Async<Result<Vec<(FileWindow, BlockFile<TFileSystem::File>)>, TorrentError>>,
-        TFileSystem::Error,
-    > {
+        cx: &mut Context,
+    ) -> Poll<Result<Vec<(FileWindow, BlockFile<TFileSystem::File>)>, TorrentError>> {
         if let Some(torrent) = self.torrents.get(&id) {
             match torrent.files_for_block(meta.clone()) {
                 Ok(files) => {
@@ -138,10 +138,22 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                             }
                         } else {
                             // file not available yet
-                            if let Async::Ready(fs_file) =
-                                self.file_system.poll_open_file(&file.path)?
+                            if let Poll::Ready(res) =
+                                self.file_system.poll_open_file(&file.path, cx)
                             {
-                                queued_files.push((file.id, fs_file, window));
+                                match res {
+                                    Ok(fs_file) => {
+                                        queued_files.push((file.id, fs_file, window));
+                                    }
+                                    Err(err) => {
+                                        return Poll::Ready(Err(TorrentError::Io {
+                                            err: io::Error::new(
+                                                io::ErrorKind::Other,
+                                                "Failed to open file.",
+                                            ),
+                                        }))
+                                    }
+                                }
                             } else {
                                 all_ready = false;
                                 break;
@@ -158,22 +170,22 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                             self.file_cache.insert(id, FileState::Busy(window));
                         }
 
-                        Ok(Async::Ready(Ok(blocks)))
+                        Poll::Ready(Ok(blocks))
                     } else {
                         // add removed states back, but queued
                         for (id, file, window) in queued_files {
                             self.file_cache.insert(id, FileState::Queued(file, window));
                         }
-                        Ok(Async::NotReady)
+                        Poll::Pending
                     }
                 }
                 Err(e) => {
                     debug!("No torrent files for block available.");
-                    Ok(Async::Ready(Err(e)))
+                    Poll::Ready(Err(e))
                 }
             }
         } else {
-            Ok(Async::Ready(Err(TorrentError::TorrentNotFound { id })))
+            Poll::Ready(Err(TorrentError::TorrentNotFound { id }))
         }
     }
 
@@ -189,25 +201,26 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
         &mut self,
         id: TorrentId,
         block: Block,
-    ) -> Result<Async<Result<BlockJob<TFileSystem::File>, TorrentError>>, TFileSystem::Error> {
+        cx: &mut Context,
+    ) -> Poll<Result<BlockJob<TFileSystem::File>, TorrentError>> {
         // validate piece hash
         if !self.is_good_piece(id, &block) {
             error!("Piece hash mismatch {:?}", block.len());
-            return Ok(Async::Ready(Err(TorrentError::BadPiece {
+            return Poll::Ready(Err(TorrentError::BadPiece {
                 index: block.metadata().piece_index,
-            })));
+            }));
         }
 
-        if let Async::Ready(res) = self.poll_files(id, block.metadata())? {
+        if let Poll::Ready(res) = self.poll_files(id, block.metadata(), cx) {
             match res {
                 Ok(files) => {
                     if files.len() == 1 {
                         let (window, file) = files.into_iter().next().unwrap();
 
-                        Ok(Async::Ready(Ok(BlockJob::Write(BlockWrite::Single {
+                        Poll::Ready(Ok(BlockJob::Write(BlockWrite::Single {
                             metadata: block.metadata(),
                             block: BlockFileWrite::new(file, block.into_bytes(), window),
-                        }))))
+                        })))
                     } else {
                         let mut blocks = Vec::with_capacity(files.len());
                         let metadata = block.metadata();
@@ -217,7 +230,7 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                         for (window, file) in files {
                             // adjust blocks
                             let fragment =
-                                Bytes::from(&block[fragemt_offset..window.length as usize]);
+                                Bytes::from(block[fragemt_offset..window.length as usize].to_vec());
                             fragemt_offset += window.length as usize;
                             blocks.push(BlockFileWrite::new(file, fragment, window));
                         }
@@ -226,18 +239,18 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                             blocks,
                             metadata,
                         });
-                        Ok(Async::Ready(Ok(block)))
+                        Poll::Ready(Ok(block))
                     }
                 }
                 Err(err) => {
                     debug!("No files found to write piece to {:?}", err);
-                    Ok(Async::Ready(Err(err)))
+                    Poll::Ready(Err(err))
                 }
             }
         } else {
             self.queued_events
                 .push_back(DiskMessageIn::WriteBlock(id, block));
-            Ok(Async::NotReady)
+            Poll::Pending
         }
     }
 
@@ -245,16 +258,17 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
         &mut self,
         id: TorrentId,
         meta: BlockMetadata,
-    ) -> Result<Async<Result<BlockJob<TFileSystem::File>, TorrentError>>, TFileSystem::Error> {
-        if let Async::Ready(res) = self.poll_files(id, meta.clone())? {
+        cx: &mut Context,
+    ) -> Poll<Result<BlockJob<TFileSystem::File>, TorrentError>> {
+        if let Poll::Ready(res) = self.poll_files(id, meta.clone(), cx) {
             match res {
                 Ok(files) => {
                     if files.len() == 1 {
                         let (window, file) = files.into_iter().next().unwrap();
-                        Ok(Async::Ready(Ok(BlockJob::Read(BlockRead::Single {
+                        Poll::Ready(Ok(BlockJob::Read(BlockRead::Single {
                             metadata: meta,
                             block: BlockFileRead::new(file, window),
-                        }))))
+                        })))
                     } else {
                         let mut blocks = Vec::with_capacity(files.len());
 
@@ -266,19 +280,24 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                             blocks,
                             metadata: meta,
                         });
-                        Ok(Async::Ready(Ok(block)))
+                        Poll::Ready(Ok(block))
                     }
                 }
-                Err(err) => Ok(Async::Ready(Err(err))),
+                Err(err) => {
+                    error!("Error opening files {:?}", err);
+                    Poll::Ready(Err(err))
+                }
             }
         } else {
+            debug!("Pending acquiring files");
             self.queued_events
                 .push_back(DiskMessageIn::ReadBlock(id, meta));
-            Ok(Async::NotReady)
+            Poll::Pending
         }
     }
 
     fn finalize_block(&mut self, block: BlockJob<TFileSystem::File>) -> DiskMessageOut {
+        debug!("Finalizing block");
         match block.finalize() {
             BlockResult::Read {
                 torrent,
@@ -290,7 +309,10 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
                         .insert(file.id, FileState::Ready(file.inner));
                 }
                 match result {
-                    Ok(block) => DiskMessageOut::BlockRead(torrent, block),
+                    Ok(block) => {
+                        debug!("Successfully read block {:?}", block.metadata());
+                        DiskMessageOut::BlockRead(torrent, block)
+                    }
                     Err(meta) => {
                         debug!("Failed to finalize read block {:?}", meta);
                         DiskMessageOut::ReadBlockError(torrent, TorrentError::BadBlock { meta })
@@ -320,18 +342,22 @@ impl<TFileSystem: FileSystem> DiskManager<TFileSystem> {
     }
 }
 
-impl<TFileSystem: FileSystem> Future for DiskManager<TFileSystem> {
-    type Item = DiskMessageOut;
-    type Error = TFileSystem::Error;
+impl<TFileSystem: FileSystem + Unpin> Future for DiskManager<TFileSystem> {
+    type Output = Result<DiskMessageOut, TFileSystem::Error>;
 
-    fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
+    // TODO implement statemachine for advancing blocks: open file -> read ->
+    // finalize --> cache files
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         // remove each `block`s one by one, update file state or add them back
         loop {
+            debug!("polling active blocks {}", self.active_blocks.len());
             for block in (0..self.active_blocks.len()).rev() {
                 let mut block = self.active_blocks.swap_remove(block);
-                if block.poll(&mut self.file_system)?.is_ready() {
-                    return Ok(Async::Ready(self.finalize_block(block)));
+                if block.poll(&mut self.file_system, cx).is_ready() {
+                    debug!("Block ready for finalizing");
+                    return Poll::Ready(Ok(self.finalize_block(block)));
                 } else {
+                    debug!("Block not ready for finalizing");
                     self.active_blocks.push(block);
                 }
             }
@@ -349,45 +375,47 @@ impl<TFileSystem: FileSystem> Future for DiskManager<TFileSystem> {
                                 self.torrents.insert(TorrentFile::new(id, meta));
                                 DiskMessageOut::TorrentAdded(id)
                             };
-                            return Ok(Async::Ready(msg));
+                            return Poll::Ready(Ok(msg));
                         }
                         DiskMessageIn::RemoveTorrent(id) => {
-                            return Ok(Async::Ready(self.remove_torrent(id)));
+                            return Poll::Ready(Ok(self.remove_torrent(id)));
                         }
                         DiskMessageIn::SyncTorrent(id) => {}
                         DiskMessageIn::ReadBlock(id, metadata) => {
-                            debug!("read block received {:?} {:?}", id, metadata);
-                            if let Async::Ready(res) =
-                                self.poll_create_block_read(id, metadata.clone())?
+                            debug!("polling readblock {:?} {:?}", id, metadata);
+                            if let Poll::Ready(res) =
+                                self.poll_create_block_read(id, metadata.clone(), cx)
                             {
                                 match res {
                                     Ok(block) => self.active_blocks.push(block),
                                     Err(err) => {
-                                        return Ok(Async::Ready(DiskMessageOut::ReadBlockError(
+                                        return Poll::Ready(Ok(DiskMessageOut::ReadBlockError(
                                             id, err,
                                         )));
                                     }
                                 }
                             } else {
-                                return Ok(Async::NotReady);
+                                debug!("Pending read...");
+                                return Poll::Pending;
                             }
                         }
                         DiskMessageIn::WriteBlock(id, block) => {
-                            debug!("Write block received {:?} {:?}", id, block.metadata());
-                            if let Async::Ready(res) = self.poll_create_block_write(id, block)? {
+                            debug!("polling write block {:?} {:?}", id, block.metadata());
+                            if let Poll::Ready(res) = self.poll_create_block_write(id, block, cx) {
                                 match res {
                                     Ok(block) => {
                                         self.active_blocks.push(block);
                                     }
                                     Err(err) => {
                                         debug!("Found bad piece to write {:?}", err);
-                                        return Ok(Async::Ready(DiskMessageOut::WriteBlockError(
+                                        return Poll::Ready(Ok(DiskMessageOut::WriteBlockError(
                                             id, err,
                                         )));
                                     }
                                 }
                             } else {
-                                return Ok(Async::NotReady);
+                                debug!("Pending write...");
+                                return Poll::Pending;
                             }
                         }
                         DiskMessageIn::MoveTorrent(id, dir) => self.move_torrent(id, dir),
@@ -397,8 +425,9 @@ impl<TFileSystem: FileSystem> Future for DiskManager<TFileSystem> {
                 }
             }
 
-            if self.queued_events.is_empty() {
-                return Ok(Async::NotReady);
+            if self.active_blocks.is_empty() {
+                debug!("no active blocks");
+                return Poll::Pending;
             }
         }
     }

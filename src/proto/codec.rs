@@ -2,8 +2,8 @@ use std::convert::TryInto;
 use std::io::{self, Read};
 
 use byteorder::{BigEndian, ByteOrder};
-use bytes::{Buf, BufMut, Bytes, BytesMut, IntoBuf};
-use tokio_codec::{Decoder, Encoder};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
+use futures_codec::{Decoder, Encoder};
 
 use crate::bitfield::BitField;
 use crate::error::Error;
@@ -195,7 +195,7 @@ impl Encoder for PeerWireCodec {
     fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
         let data = item.as_bytes()?;
         dst.reserve(data.len());
-        dst.put(data);
+        dst.put(data.as_slice());
         Ok(())
     }
 }

@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use bytes::{BufMut, BytesMut};
 use fnv::FnvHashMap;
-use futures::Async;
 use libp2p_core::PeerId;
 use rand::{self, seq::SliceRandom, Rng};
 use wasm_timer::Instant;

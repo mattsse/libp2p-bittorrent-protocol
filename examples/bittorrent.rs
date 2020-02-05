@@ -25,9 +25,13 @@
 use std::env;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::{
+    error::Error,
+    task::{Context, Poll},
+};
 
 use futures::prelude::*;
-use libp2p::{build_development_transport, identity, PeerId, Swarm};
+use libp2p::{identity, PeerId, Swarm};
 use rand;
 use tempfile::tempdir;
 
@@ -43,16 +47,17 @@ use libp2p_bittorrent::{
     TorrentSeed,
 };
 
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
 
     // Create a random key for ourselves.
     let local_key = identity::Keypair::generate_ed25519();
     let local_peer_id = PeerId::from(local_key.public());
     println!("Local peer id: {:?}", local_peer_id);
+    let peer_id = local_peer_id.to_string();
 
     // Set up a an encrypted DNS-enabled TCP Transport over the Mplex protocol
-    let transport = build_development_transport(local_key);
+    let transport = libp2p::build_development_transport(local_key)?;
 
     let tmp_dir = tempdir().expect("Failed to create temp dir");
     println!("Initialized tmp dir {}", tmp_dir.path().display());
@@ -62,6 +67,8 @@ fn main() {
     let behaviour = BitTorrent::with_config(local_peer_id.clone(), native_fs, config);
 
     let mut swarm = Swarm::new(transport, behaviour, local_peer_id);
+
+    let mut torrent_file = "".to_string();
 
     // Order BitTorrent to start torrenting from a peer.
     if let Some(addr) = env::args().nth(1) {
@@ -114,6 +121,7 @@ fn main() {
             .expect("Failed to save torrent file");
 
         println!("Torrentfile: {}", torrent.display());
+        torrent_file = format!("{}", torrent.display());
 
         let seed = TorrentSeed::new(seed, meta_info);
 
@@ -126,74 +134,86 @@ fn main() {
 
     // Use tokio to drive the `Swarm`.
     let mut listening = false;
+
     // Start torrenting
-    tokio::run(futures::future::poll_fn(move || loop {
-        match swarm.poll().expect("Error while polling swarm") {
-            Async::Ready(Some(BitTorrentEvent::TorrentAddedResult(res))) => match res {
-                Ok(ok) => {
-                    println!("Added new Seed: {:?}", ok);
-                }
-                Err(err) => {
-                    println!("Failed to add new seed: {:?}", err);
-                }
-            },
-            Async::Ready(Some(BitTorrentEvent::HandshakeResult(res))) => match res {
-                Ok(ok) => {
-                    println!("Handshake ok: {:?}", ok);
-                }
-                Err(err) => {
-                    println!("Failed to handshake: {:?}", err);
-                }
-            },
-            Async::Ready(Some(BitTorrentEvent::InterestResult(res))) => match res {
-                Ok(InterestOk::Interested(peer)) => {
-                    swarm.unchoke_peer(&peer);
-                    println!("interested: {:?}", peer);
-                }
-                Ok(InterestOk::NotInterested(peer)) => {
-                    println!("not interested: {:?}", peer);
-                }
-                Err(err) => {
-                    println!("interest error: {:?}", err);
-                }
-            },
-            Async::Ready(Some(BitTorrentEvent::BitfieldResult(res))) => match res {
-                Ok(ok) => {
-                    println!("bitfield ok: {:?}", ok);
-                }
-                Err(err) => {
-                    println!("bitfield error: {:?}", err);
-                }
-            },
-            Async::Ready(Some(BitTorrentEvent::ChokeResult(res))) => match res {
-                Ok(ok) => {
-                    println!("choke ok: {:?}", ok);
-                }
-                Err(err) => {
-                    println!("choke error: {:?}", err);
-                }
-            },
-            Async::Ready(Some(BitTorrentEvent::HaveResult(res))) => match res {
-                Ok(ok) => {
-                    println!("have ok: {:?}", ok);
-                }
-                Err(err) => {
-                    println!("have error: {:?}", err);
-                }
-            },
-            Async::Ready(Some(BitTorrentEvent::TorrentFinished(torrent))) => {
-                println!("Torrent finished {:?}", torrent);
-            }
-            Async::Ready(Some(_)) => {}
-            Async::Ready(None) | Async::NotReady => {
-                if !listening {
-                    if let Some(a) = Swarm::listeners(&swarm).next() {
-                        println!("Listening on {:?}", a);
-                        listening = true;
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(futures::future::poll_fn(move |cx: &mut Context| loop {
+            match swarm.poll_next_unpin(cx) {
+                Poll::Ready(Some(BitTorrentEvent::TorrentAddedResult(res))) => match res {
+                    Ok(ok) => {
+                        println!("Added new Seed: {:?}", ok);
                     }
+                    Err(err) => {
+                        println!("Failed to add new seed: {:?}", err);
+                    }
+                },
+                Poll::Ready(Some(BitTorrentEvent::HandshakeResult(res))) => match res {
+                    Ok(ok) => {
+                        println!("Handshake ok: {:?}", ok);
+                    }
+                    Err(err) => {
+                        println!("Failed to handshake: {:?}", err);
+                    }
+                },
+                Poll::Ready(Some(BitTorrentEvent::InterestResult(res))) => match res {
+                    Ok(InterestOk::Interested(peer)) => {
+                        swarm.unchoke_peer(&peer);
+                        println!("interested: {:?}", peer);
+                    }
+                    Ok(InterestOk::NotInterested(peer)) => {
+                        println!("not interested: {:?}", peer);
+                    }
+                    Err(err) => {
+                        println!("interest error: {:?}", err);
+                    }
+                },
+                Poll::Ready(Some(BitTorrentEvent::BitfieldResult(res))) => match res {
+                    Ok(ok) => {
+                        println!("bitfield ok: {:?}", ok);
+                    }
+                    Err(err) => {
+                        println!("bitfield error: {:?}", err);
+                    }
+                },
+                Poll::Ready(Some(BitTorrentEvent::ChokeResult(res))) => match res {
+                    Ok(ok) => {
+                        println!("choke ok: {:?}", ok);
+                    }
+                    Err(err) => {
+                        println!("choke error: {:?}", err);
+                    }
+                },
+                Poll::Ready(Some(BitTorrentEvent::HaveResult(res))) => match res {
+                    Ok(ok) => {
+                        println!("have ok: {:?}", ok);
+                    }
+                    Err(err) => {
+                        println!("have error: {:?}", err);
+                    }
+                },
+                Poll::Ready(Some(BitTorrentEvent::TorrentFinished(torrent))) => {
+                    println!("Torrent finished {:?}", torrent);
                 }
-                return Ok(Async::NotReady);
+                Poll::Ready(Some(BitTorrentEvent::DiskResult(disk))) => {
+                    println!("Disk result {:?}", disk);
+                }
+                Poll::Ready(Some(_)) => {}
+                Poll::Ready(None) | Poll::Pending => {
+                    if !listening {
+                        if let Some(a) = Swarm::listeners(&swarm).next() {
+                            println!("Listening on {:?}", a);
+                            println!(
+                                " cargo run --example bittorrent {:?} \"{}\" \"{}\"",
+                                a, peer_id, torrent_file
+                            );
+                            listening = true;
+                        }
+                    }
+                    return Poll::<()>::Pending;
+                }
             }
-        }
-    }));
+        }));
+
+    Ok(())
 }

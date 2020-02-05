@@ -2,6 +2,7 @@ use std::fmt;
 use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
+use std::{borrow::Cow, pin::Pin, task::Context, task::Poll};
 
 use futures::prelude::*;
 use libp2p_core::{
@@ -15,7 +16,6 @@ use libp2p_swarm::{
     ProtocolsHandlerUpgrErr,
     SubstreamProtocol,
 };
-use tokio_io::{AsyncRead, AsyncWrite};
 use wasm_timer::Instant;
 
 use crate::behavior::{BitTorrent, SeedLeechConfig};
@@ -38,7 +38,7 @@ use crate::util::ShaHash;
 /// It also handles requests made by the remote.
 pub struct BitTorrentHandler<TSubstream, TUserData>
 where
-    TSubstream: AsyncRead + AsyncWrite,
+    TSubstream: AsyncRead + AsyncWrite + Unpin,
 {
     /// Configuration for the BitTorrent protocol.
     config: BitTorrentProtocolConfig,
@@ -54,7 +54,7 @@ where
 
 impl<TSubstream, TUserData> BitTorrentHandler<TSubstream, TUserData>
 where
-    TSubstream: AsyncRead + AsyncWrite,
+    TSubstream: AsyncRead + AsyncWrite + Unpin,
 {
     /// Create a `BitTorrentHandler` that only allows leeching from remote but
     /// denying incoming piece request.
@@ -87,7 +87,7 @@ where
 /// State of an active substream, opened either by us or by the remote.
 enum SubstreamState<TSubstream, TUserData>
 where
-    TSubstream: AsyncRead + AsyncWrite,
+    TSubstream: AsyncRead + AsyncWrite + Unpin,
 {
     /// We haven't started opening the outgoing substream yet.
     /// Contains the request we want to send, and the user data if we expect an
@@ -119,38 +119,42 @@ where
 
 impl<TSubstream, TUserData> SubstreamState<TSubstream, TUserData>
 where
-    TSubstream: AsyncRead + AsyncWrite,
+    TSubstream: AsyncRead + AsyncWrite + Unpin,
 {
     /// Consumes this state and tries to close the substream.
     ///
     /// If the substream is not ready to be closed, returns it back.
-    fn try_close(self) -> AsyncSink<Self> {
+    fn try_close(&mut self, cx: &mut Context) -> Poll<()> {
         match self {
             SubstreamState::OutPendingOpen(_, _) | SubstreamState::OutReportError(_, _) => {
-                AsyncSink::Ready
+                Poll::Ready(())
             }
-            SubstreamState::OutPendingSend(mut stream, _, _)
-            | SubstreamState::OutPendingFlush(mut stream, _)
-            | SubstreamState::OutWaitingAnswer(mut stream, _, _)
-            | SubstreamState::OutClosing(mut stream) => match stream.close() {
-                Ok(Async::Ready(())) | Err(_) => AsyncSink::Ready,
-                Ok(Async::NotReady) => AsyncSink::NotReady(SubstreamState::OutClosing(stream)),
-            },
-            SubstreamState::InWaitingMessage(_, mut stream)
-            | SubstreamState::InWaitingUser(_, mut stream)
-            | SubstreamState::InPendingSend(_, mut stream, _)
-            | SubstreamState::InPendingFlush(_, mut stream)
-            | SubstreamState::InClosing(mut stream) => match stream.close() {
-                Ok(Async::Ready(())) | Err(_) => AsyncSink::Ready,
-                Ok(Async::NotReady) => AsyncSink::NotReady(SubstreamState::InClosing(stream)),
-            },
+            SubstreamState::OutPendingSend(ref mut stream, _, _)
+            | SubstreamState::OutPendingFlush(ref mut stream, _)
+            | SubstreamState::OutWaitingAnswer(ref mut stream, _, _)
+            | SubstreamState::OutClosing(ref mut stream) => {
+                match Sink::poll_close(Pin::new(stream), cx) {
+                    Poll::Ready(_) => Poll::Ready(()),
+                    Poll::Pending => Poll::Pending,
+                }
+            }
+            SubstreamState::InWaitingMessage(_, ref mut stream)
+            | SubstreamState::InWaitingUser(_, ref mut stream)
+            | SubstreamState::InPendingSend(_, ref mut stream, _)
+            | SubstreamState::InPendingFlush(_, ref mut stream)
+            | SubstreamState::InClosing(ref mut stream) => {
+                match Sink::poll_close(Pin::new(stream), cx) {
+                    Poll::Ready(_) => Poll::Ready(()),
+                    Poll::Pending => Poll::Pending,
+                }
+            }
         }
     }
 }
 
 impl<TSubstream, TUserData> ProtocolsHandler for BitTorrentHandler<TSubstream, TUserData>
 where
-    TSubstream: AsyncRead + AsyncWrite,
+    TSubstream: AsyncRead + AsyncWrite + Unpin,
     TUserData: Clone,
 {
     type InEvent = BitTorrentHandlerIn<TUserData>;
@@ -163,13 +167,14 @@ where
     // answer.
     type OutboundOpenInfo = (PeerMessage, Option<TUserData>);
 
+    #[inline]
     fn listen_protocol(&self) -> SubstreamProtocol<Self::InboundProtocol> {
         SubstreamProtocol::new(self.config.clone())
     }
 
     fn inject_fully_negotiated_inbound(
         &mut self,
-        protocol: <Self::InboundProtocol as InboundUpgrade<TSubstream>>::Output,
+        protocol: <Self::InboundProtocol as InboundUpgrade<Negotiated<TSubstream>>>::Output,
     ) {
         let connec_unique_id = self.next_connec_unique_id;
         self.next_connec_unique_id.0 += 1;
@@ -180,7 +185,7 @@ where
 
     fn inject_fully_negotiated_outbound(
         &mut self,
-        protocol: <Self::OutboundProtocol as OutboundUpgrade<TSubstream>>::Output,
+        protocol: <Self::OutboundProtocol as OutboundUpgrade<Negotiated<TSubstream>>>::Output,
         (msg, user_data): Self::OutboundOpenInfo,
     ) {
         self.substreams
@@ -207,7 +212,10 @@ where
                     _ => false,
                 });
                 if let Some(pos) = pos {
-                    let _ = self.substreams.remove(pos).try_close();
+                    // TODO: we don't properly close down the substream
+                    let waker = futures::task::noop_waker();
+                    let mut cx = Context::from_waker(&waker);
+                    let _ = self.substreams.remove(pos).try_close(&mut cx);
                 }
             }
             BitTorrentHandlerIn::HandshakeReq {
@@ -280,7 +288,10 @@ where
                     _ => false,
                 });
                 if let Some(pos) = pos {
-                    let _ = self.substreams.remove(pos).try_close();
+                    // TODO: we don't properly close down the substream
+                    let waker = futures::task::noop_waker();
+                    let mut cx = Context::from_waker(&waker);
+                    let _ = self.substreams.remove(pos).try_close(&mut cx);
                 } else {
                     // piece request might be already sent so we send a cancel
                     self.substreams.push(SubstreamState::OutPendingOpen(
@@ -367,21 +378,26 @@ where
 
     fn poll(
         &mut self,
+        cx: &mut Context,
     ) -> Poll<
-        ProtocolsHandlerEvent<Self::OutboundProtocol, Self::OutboundOpenInfo, Self::OutEvent>,
-        error::Error,
+        ProtocolsHandlerEvent<
+            Self::OutboundProtocol,
+            Self::OutboundOpenInfo,
+            Self::OutEvent,
+            Self::Error,
+        >,
     > {
         // We remove each element from `substreams` one by one and add them back.
         for n in (0..self.substreams.len()).rev() {
             let mut substream = self.substreams.swap_remove(n);
             loop {
-                match advance_substream(substream, self.config.clone()) {
+                match advance_substream(substream, self.config.clone(), cx) {
                     (Some(new_state), Some(event), _) => {
                         self.substreams.push(new_state);
-                        return Ok(Async::Ready(event));
+                        return Poll::Ready(event);
                     }
                     (None, Some(event), _) => {
-                        return Ok(Async::Ready(event));
+                        return Poll::Ready(event);
                     }
                     (Some(new_state), None, false) => {
                         self.substreams.push(new_state);
@@ -404,7 +420,7 @@ where
             self.keep_alive = KeepAlive::Yes;
         }
 
-        Ok(Async::NotReady)
+        Poll::Pending
     }
 }
 /// Event to send to the handler.
@@ -608,6 +624,7 @@ impl From<ProtocolsHandlerUpgrErr<io::Error>> for BitTorrentHandlerTorrentErr {
 fn advance_substream<TSubstream, TUserData>(
     state: SubstreamState<TSubstream, TUserData>,
     upgrade: BitTorrentProtocolConfig,
+    cx: &mut Context,
 ) -> (
     Option<SubstreamState<TSubstream, TUserData>>,
     Option<
@@ -615,12 +632,13 @@ fn advance_substream<TSubstream, TUserData>(
             BitTorrentProtocolConfig,
             (PeerMessage, Option<TUserData>),
             BitTorrentHandlerEvent<TUserData>,
+            error::Error,
         >,
     >,
     bool,
 )
 where
-    TSubstream: AsyncRead + AsyncWrite,
+    TSubstream: AsyncRead + AsyncWrite + Unpin,
 {
     match state {
         SubstreamState::OutPendingOpen(msg, user_data) => {
@@ -631,18 +649,34 @@ where
             (None, Some(ev), false)
         }
         SubstreamState::OutPendingSend(mut substream, msg, user_data) => {
-            match substream.start_send(msg) {
-                Ok(AsyncSink::Ready) => (
-                    Some(SubstreamState::OutPendingFlush(substream, user_data)),
-                    None,
-                    true,
-                ),
-                Ok(AsyncSink::NotReady(msg)) => (
+            match Sink::poll_ready(Pin::new(&mut substream), cx) {
+                Poll::Ready(Ok(())) => match Sink::start_send(Pin::new(&mut substream), msg) {
+                    Ok(()) => (
+                        Some(SubstreamState::OutPendingFlush(substream, user_data)),
+                        None,
+                        true,
+                    ),
+                    Err(error) => {
+                        let event = if let Some(user_data) = user_data {
+                            Some(ProtocolsHandlerEvent::Custom(
+                                BitTorrentHandlerEvent::TorrentErr {
+                                    error: BitTorrentHandlerTorrentErr::Io(error),
+                                    user_data: Some(user_data),
+                                },
+                            ))
+                        } else {
+                            None
+                        };
+
+                        (None, event, false)
+                    }
+                },
+                Poll::Pending => (
                     Some(SubstreamState::OutPendingSend(substream, msg, user_data)),
                     None,
                     false,
                 ),
-                Err(error) => {
+                Poll::Ready(Err(error)) => {
                     let event = if let Some(user_data) = user_data {
                         Some(ProtocolsHandlerEvent::Custom(
                             BitTorrentHandlerEvent::TorrentErr {
@@ -659,8 +693,8 @@ where
             }
         }
         SubstreamState::OutPendingFlush(mut substream, user_data) => {
-            match substream.poll_complete() {
-                Ok(Async::Ready(())) => {
+            match Sink::poll_flush(Pin::new(&mut substream), cx) {
+                Poll::Ready(Ok(())) => {
                     if let Some(user_data) = user_data {
                         (
                             Some(SubstreamState::OutWaitingAnswer(
@@ -675,12 +709,12 @@ where
                         (Some(SubstreamState::OutClosing(substream)), None, true)
                     }
                 }
-                Ok(Async::NotReady) => (
+                Poll::Pending => (
                     Some(SubstreamState::OutPendingFlush(substream, user_data)),
                     None,
                     false,
                 ),
-                Err(error) => {
+                Poll::Ready(Err(error)) => {
                     let event = if let Some(user_data) = user_data {
                         Some(ProtocolsHandlerEvent::Custom(
                             BitTorrentHandlerEvent::TorrentErr {
@@ -697,8 +731,8 @@ where
             }
         }
         SubstreamState::OutWaitingAnswer(mut substream, user_data, instant) => {
-            match substream.poll() {
-                Ok(Async::Ready(Some(msg))) => {
+            match Stream::poll_next(Pin::new(&mut substream), cx) {
+                Poll::Ready(Some(Ok(msg))) => {
                     let new_state = SubstreamState::OutClosing(substream);
                     let event = process_btt_out(msg, user_data);
                     (
@@ -707,21 +741,21 @@ where
                         true,
                     )
                 }
-                Ok(Async::NotReady) => (
+                Poll::Pending => (
                     Some(SubstreamState::OutWaitingAnswer(
                         substream, user_data, instant,
                     )),
                     None,
                     false,
                 ),
-                Err(error) => {
+                Poll::Ready(Some(Err(error))) => {
                     let event = BitTorrentHandlerEvent::TorrentErr {
                         error: BitTorrentHandlerTorrentErr::Io(error),
                         user_data: Some(user_data),
                     };
                     (None, Some(ProtocolsHandlerEvent::Custom(event)), false)
                 }
-                Ok(Async::Ready(None)) => {
+                Poll::Ready(None) => {
                     let event = BitTorrentHandlerEvent::TorrentErr {
                         error: BitTorrentHandlerTorrentErr::Io(io::ErrorKind::UnexpectedEof.into()),
                         user_data: Some(user_data),
@@ -737,70 +771,82 @@ where
             };
             (None, Some(ProtocolsHandlerEvent::Custom(event)), false)
         }
-        SubstreamState::OutClosing(mut stream) => match stream.close() {
-            Ok(Async::Ready(())) => (None, None, false),
-            Ok(Async::NotReady) => (Some(SubstreamState::OutClosing(stream)), None, false),
-            Err(_) => (None, None, false),
+        SubstreamState::OutClosing(mut stream) => match Sink::poll_close(Pin::new(&mut stream), cx)
+        {
+            Poll::Ready(Ok(())) => (None, None, false),
+            Poll::Pending => (Some(SubstreamState::OutClosing(stream)), None, false),
+            Poll::Ready(Err(_)) => (None, None, false),
         },
-        SubstreamState::InWaitingMessage(id, mut substream) => match substream.poll() {
-            Ok(Async::Ready(Some(msg))) => {
-                let ev = process_btt_in(msg, id);
-                (
-                    Some(SubstreamState::InWaitingUser(id, substream)),
-                    Some(ProtocolsHandlerEvent::Custom(ev)),
+        SubstreamState::InWaitingMessage(id, mut substream) => {
+            match Stream::poll_next(Pin::new(&mut substream), cx) {
+                Poll::Ready(Some(Ok(msg))) => {
+                    let ev = process_btt_in(msg, id);
+                    (
+                        Some(SubstreamState::InWaitingUser(id, substream)),
+                        Some(ProtocolsHandlerEvent::Custom(ev)),
+                        false,
+                    )
+                }
+                Poll::Pending => (
+                    Some(SubstreamState::InWaitingMessage(id, substream)),
+                    None,
                     false,
-                )
+                ),
+                Poll::Ready(None) => {
+                    trace!("Inbound substream: EOF");
+                    (None, None, false)
+                }
+                Poll::Ready(Some(Err(e))) => {
+                    trace!("Inbound substream error: {:?}", e);
+                    (None, None, false)
+                }
             }
-            Ok(Async::NotReady) => (
-                Some(SubstreamState::InWaitingMessage(id, substream)),
-                None,
-                false,
-            ),
-            Ok(Async::Ready(None)) => {
-                trace!("Inbound substream: EOF");
-                (None, None, false)
-            }
-            Err(e) => {
-                trace!("Inbound substream error: {:?}", e);
-                (None, None, false)
-            }
-        },
+        }
         SubstreamState::InWaitingUser(id, substream) => (
             Some(SubstreamState::InWaitingUser(id, substream)),
             None,
             false,
         ),
-        SubstreamState::InPendingSend(id, mut substream, msg) => match substream.start_send(msg) {
-            Ok(AsyncSink::Ready) => (
-                Some(SubstreamState::InPendingFlush(id, substream)),
-                None,
-                true,
-            ),
-            Ok(AsyncSink::NotReady(msg)) => (
-                Some(SubstreamState::InPendingSend(id, substream, msg)),
-                None,
-                false,
-            ),
-            Err(_) => (None, None, false),
-        },
-        SubstreamState::InPendingFlush(id, mut substream) => match substream.poll_complete() {
-            Ok(Async::Ready(())) => (
-                Some(SubstreamState::InWaitingMessage(id, substream)),
-                None,
-                true,
-            ),
-            Ok(Async::NotReady) => (
-                Some(SubstreamState::InPendingFlush(id, substream)),
-                None,
-                false,
-            ),
-            Err(_) => (None, None, false),
-        },
-        SubstreamState::InClosing(mut stream) => match stream.close() {
-            Ok(Async::Ready(())) => (None, None, false),
-            Ok(Async::NotReady) => (Some(SubstreamState::InClosing(stream)), None, false),
-            Err(_) => (None, None, false),
-        },
+        SubstreamState::InPendingSend(id, mut substream, msg) => {
+            match Sink::poll_ready(Pin::new(&mut substream), cx) {
+                Poll::Ready(Ok(())) => match Sink::start_send(Pin::new(&mut substream), msg) {
+                    Ok(()) => (
+                        Some(SubstreamState::InPendingFlush(id, substream)),
+                        None,
+                        true,
+                    ),
+                    Err(_) => (None, None, false),
+                },
+                Poll::Pending => (
+                    Some(SubstreamState::InPendingSend(id, substream, msg)),
+                    None,
+                    false,
+                ),
+                Poll::Ready(Err(_)) => (None, None, false),
+            }
+        }
+        SubstreamState::InPendingFlush(id, mut substream) => {
+            match Sink::poll_flush(Pin::new(&mut substream), cx) {
+                Poll::Ready(Ok(())) => (
+                    Some(SubstreamState::InWaitingMessage(id, substream)),
+                    None,
+                    true,
+                ),
+                Poll::Pending => (
+                    Some(SubstreamState::InPendingFlush(id, substream)),
+                    None,
+                    false,
+                ),
+                Poll::Ready(Err(_)) => (None, None, false),
+            }
+        }
+        SubstreamState::InClosing(mut stream) => {
+            match Sink::poll_close(Pin::new(&mut stream), cx) {
+                Poll::Ready(Ok(())) => (None, None, false),
+                Poll::Pending => (Some(SubstreamState::InClosing(stream)), None, false),
+                Poll::Ready(Err(_)) => (None, None, false),
+            }
+        }
     }
 }
 

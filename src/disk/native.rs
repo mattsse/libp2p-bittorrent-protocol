@@ -1,13 +1,14 @@
+use bytes::BufMut;
+use futures::io::Error;
+use futures::prelude::*;
+use futures::task::{Context, Poll};
 use std::collections::HashMap;
 use std::io;
-use std::io::{Error, SeekFrom};
+use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
-
-use bytes::BufMut;
-use futures::{Async, Future};
-use tokio_fs::file::{OpenFuture, SeekFuture};
-use tokio_fs::{File, OpenOptions};
-use tokio_io::{AsyncRead, AsyncWrite};
+use std::pin::Pin;
+use tokio::fs::*;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 
 use crate::disk::block::{Block, BlockMut};
 use crate::disk::error::TorrentError;
@@ -38,69 +39,60 @@ impl<T: AsRef<Path>> From<T> for NativeFileSystem {
 }
 
 impl FileSystem for NativeFileSystem {
-    type File = tokio_fs::File;
+    type File = File;
     type Error = io::Error;
 
-    fn poll_open_file<P>(&mut self, path: P) -> Result<Async<Self::File>, Self::Error>
+    fn poll_open_file<P>(&self, path: P, cx: &mut Context) -> Poll<Result<Self::File, Self::Error>>
     where
         P: AsRef<Path>,
     {
         let path = self.target_dir.join(path);
-        self.file_ops.open(path).poll()
+        self.file_ops.open(path).boxed().poll_unpin(cx)
     }
 
-    fn sync_file<P>(&mut self, path: P) -> Result<Async<()>, Self::Error>
-    where
-        P: AsRef<Path> + Send + 'static,
-    {
-        unimplemented!()
+    fn sync_file<P>(
+        &mut self,
+        file: &mut Self::File,
+        cx: &mut Context,
+    ) -> Poll<Result<(), Self::Error>> {
+        file.sync_all().boxed().poll_unpin(cx)
     }
 
-    fn poll_file_size(&self, file: &mut Self::File) -> Result<Async<u64>, Self::Error> {
-        file.poll_metadata().map(|meta| {
-            if let Async::Ready(meta) = meta {
-                Async::Ready(meta.len())
-            } else {
-                Async::NotReady
-            }
-        })
-    }
-
-    fn read_file(
+    fn poll_file_size(
         &self,
         file: &mut Self::File,
-        offset: u64,
-        buffer: &mut [u8],
-    ) -> Result<usize, Error> {
-        unimplemented!()
+        cx: &mut Context,
+    ) -> Poll<Result<u64, Self::Error>> {
+        file.metadata()
+            .boxed()
+            .poll_unpin(cx)
+            .map(|r| r.map(|meta| meta.len()))
     }
 
-    fn poll_seek(&self, file: &mut Self::File, seek: SeekFrom) -> Result<Async<u64>, Self::Error> {
-        file.poll_seek(seek)
+    fn poll_seek(
+        &self,
+        file: &mut Self::File,
+        seek: SeekFrom,
+        cx: &mut Context,
+    ) -> Poll<Result<u64, Self::Error>> {
+        file.seek(seek).boxed().poll_unpin(cx)
     }
 
     fn poll_read_block<B: BufMut>(
         &self,
         file: &mut Self::File,
         block: &mut B,
-    ) -> Result<Async<usize>, Self::Error> {
-        file.read_buf(block)
+        cx: &mut Context,
+    ) -> Poll<Result<usize, Self::Error>> {
+        Pin::new(file).poll_read_buf(cx, block)
     }
 
     fn poll_write_block(
         &self,
         file: &mut Self::File,
         buf: &[u8],
-    ) -> Result<Async<usize>, Self::Error> {
-        file.poll_write(buf)
-    }
-
-    fn write_file(
-        &self,
-        file: &mut Self::File,
-        offset: u64,
-        buffer: &[u8],
-    ) -> Result<usize, Error> {
-        unimplemented!()
+        cx: &mut Context,
+    ) -> Poll<Result<usize, Self::Error>> {
+        Pin::new(file).poll_write(cx, buf)
     }
 }

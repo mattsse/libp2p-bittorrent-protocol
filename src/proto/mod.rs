@@ -2,18 +2,11 @@ use std::{borrow::Cow, convert::TryFrom, time::Duration};
 use std::{io, iter};
 
 use bytes::BytesMut;
-use futures::{
-    future::{self, FutureResult},
-    sink,
-    stream,
-    Sink,
-    Stream,
-};
+use futures::prelude::*;
+use futures_codec::Framed;
 use libp2p_core::upgrade::{InboundUpgrade, Negotiated, OutboundUpgrade, UpgradeInfo};
 use libp2p_core::{Multiaddr, PeerId};
 use sha1::Sha1;
-use tokio_codec::Framed;
-use tokio_io::{AsyncRead, AsyncWrite};
 use wasm_timer::Instant;
 
 use crate::proto::codec::PeerWireCodec;
@@ -59,30 +52,30 @@ pub type BttStreamSink<S> = Framed<S, PeerWireCodec>;
 
 impl<C> InboundUpgrade<C> for BitTorrentProtocolConfig
 where
-    C: AsyncRead + AsyncWrite,
+    C: AsyncRead + AsyncWrite + Unpin,
 {
-    type Output = BttStreamSink<Negotiated<C>>;
+    type Output = BttStreamSink<C>;
+    type Future = future::Ready<Result<Self::Output, io::Error>>;
     type Error = io::Error;
-    type Future = FutureResult<Self::Output, io::Error>;
 
     #[inline]
-    fn upgrade_inbound(self, socket: Negotiated<C>, info: Self::Info) -> Self::Future {
+    fn upgrade_inbound(self, incoming: C, _: Self::Info) -> Self::Future {
         let mut codec = Default::default();
-        future::ok(Framed::new(socket, codec))
+        future::ok(Framed::new(incoming, codec))
     }
 }
 
 impl<C> OutboundUpgrade<C> for BitTorrentProtocolConfig
 where
-    C: AsyncRead + AsyncWrite,
+    C: AsyncRead + AsyncWrite + Unpin,
 {
-    type Output = BttStreamSink<Negotiated<C>>;
+    type Output = BttStreamSink<C>;
+    type Future = future::Ready<Result<Self::Output, io::Error>>;
     type Error = io::Error;
-    type Future = FutureResult<Self::Output, io::Error>;
 
     #[inline]
-    fn upgrade_outbound(self, socket: Negotiated<C>, info: Self::Info) -> Self::Future {
+    fn upgrade_outbound(self, incoming: C, _: Self::Info) -> Self::Future {
         let mut codec = PeerWireCodec::default();
-        future::ok(Framed::new(socket, codec))
+        future::ok(Framed::new(incoming, codec))
     }
 }
